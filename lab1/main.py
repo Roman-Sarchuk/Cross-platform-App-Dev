@@ -2,30 +2,153 @@ import tkinter as tk
 from tkinter import messagebox
 
 
-class KeypadLock(tk.Toplevel):
-    CORRECT_CODE = "3442"
+class Application(tk.Tk):
+    USERS = {
+        "roman": "3442",
+        "yura": "7777",
+        "tom": "1234",
+        "jerry": "4321"
+    }
 
-    def __init__(self, master):
+    def __init__(self):
+        super().__init__()
+        self.locker = None
+        self.username = ""
+        self.menus = {}
+
+        # *** init win setting ***
+        self.title("Application")
+        self.geometry("500x300")
+        self.minsize(300, 200)
+        # *** **** *** ******* ***
+
+        # *** login_menu components ***
+        self.menus["login"] = tk.Frame(self)
+        self.cur_menu = "login"
+
+        # Configure grid weights to allow centering
+        self.menus["login"].grid_columnconfigure(0, weight=1)  # Left column expands
+        self.menus["login"].grid_columnconfigure(2, weight=1)  # Right column expands
+        self.menus["login"].grid_rowconfigure(0, weight=1)  # Top row expands
+        self.menus["login"].grid_rowconfigure(4, weight=1)  # Bottom row expands
+
+        # init components
+        self.login_label = tk.Label(self.menus["login"], text="Enter yor username", font=("Arial", 20))
+        self.login_entry = tk.Entry(self.menus["login"], width=30, justify="center", font=("Arial", 12))
+        self.login_button = tk.Button(self.menus["login"], text="Log In", command=self.log_in,
+                                      width=15, height=2, bg="#4CAF50", fg="white")
+
+        self.show_login_menu()
+        # *** ********** ********** ***
+
+        # *** main_menu components ***
+        self.menus["main"] = tk.Frame(self)
+
+        # Configure grid weights to allow centering
+        self.menus["main"].grid_columnconfigure(0, weight=1)  # Left column expands
+        self.menus["main"].grid_columnconfigure(2, weight=1)  # Right column expands
+        self.menus["main"].grid_rowconfigure(0, weight=1)  # Top row expands
+        self.menus["main"].grid_rowconfigure(3, weight=1)  # Bottom row expands
+
+        # init components
+        self.main_label = tk.Label(self.menus["main"], text="Hello, USER", font=("Arial", 24))
+        self.main_button = tk.Button(self.menus["main"], text="Log Out", command=self.lock,
+                                     width=15, height=2, bg="#b8473b", fg="white")
+        # *** ********* ********** ***
+
+    # *** login processing ***
+    def log_in(self):
+        self.username = self.login_entry.get().strip().lower()
+        if not self.username:
+            messagebox.showwarning("Warning", "Please enter a username!")
+        elif self.username not in self.USERS:
+            messagebox.showwarning("Warning", f"Incorrect username!")
+        else:
+            self.open_locker()
+
+    def open_locker(self):
+        # Check if KeyLock is already open
+        if self.locker is None or not self.locker.winfo_exists():
+            # If not open or was closed, create a new one
+            self.locker = KeyLock(self, self.USERS[self.username])
+
+            # Make the main window wait until KeyLock is closed
+            self.wait_window(self.locker)
+        else:
+            # If already open, just focus on it
+            self.locker.focus_force()
+
+            # Optionally flash the window to get user's attention
+            self.locker.attributes('-topmost', True)
+            self.locker.attributes('-topmost', False)
+
+    def unlock(self):
+        self.show_main_menu()
+
+    def lock(self):
+        self.show_login_menu()
+    # *** ***** ********** ***
+
+    # *** menus ***
+    def hide_cur_menu(self):
+        self.menus[self.cur_menu].pack_forget()
+
+    def show_login_menu(self):
+        self.hide_cur_menu()
+        self.cur_menu = "login"
+
+        # show login_frame
+        self.menus["login"].pack(fill=tk.BOTH, expand=True)
+
+        # place components in the middle column (1) with padding
+        self.login_label.grid(row=1, column=1, pady=(10, 5))
+        self.login_entry.grid(row=2, column=1, pady=5)
+        self.login_button.grid(row=3, column=1, pady=(5, 10))
+
+    def show_main_menu(self):
+        self.hide_cur_menu()
+        self.cur_menu = "main"
+
+        # show main_frame
+        self.menus["main"].pack(fill=tk.BOTH, expand=True)
+
+        # place components in the middle column (1) with padding
+        self.main_label.config(text=f"Hello, {self.username.capitalize()}!")
+        self.main_label.grid(row=1, column=1, pady=(10, 5))
+        self.main_button.grid(row=2, column=1, pady=(5, 10))
+    # *** ***** ***
+
+
+class KeyLock(tk.Toplevel):
+    CODE_LEN = 4
+
+    def __init__(self, master, code):
         super().__init__(master)
         self.master = master
 
-        self.title("Кодовий замок")
+        # init win setting
+        self.title("KeyLock")
         self.resizable(width=False, height=False)
 
-        self.code = ""
+        # initial widgets
+        validation = self.register(self.__validate_number)
+        self.entry = tk.Entry(self, validate="key", validatecommand=(validation, "%P"), font=("Arial", 14),
+                              justify="center", width=10, bd=10)
+        self.entry.pack(fill="x", padx=5, pady=(5, 0))
 
-        # Code field
-        self.frame_display = tk.Frame(self)
-        self.frame_display.pack(fill="x", padx=5, pady=5)
-
-        self.label_display = tk.Label(self.frame_display, bg="white", font=("Arial", 14), height=2)
-        self.label_display.pack(fill="x", padx=2, pady=2)
-
-        # Keyboard
         self.frame_keyboard = tk.Frame(self)
         self.frame_keyboard.pack(fill="both", padx=5, pady=5)
 
         self.create_buttons()
+
+        # other values
+        self.CORRECT_CODE = code
+
+    def __validate_number(self, new_value):
+        # Allow empty string or digits only
+        if len(new_value) <= self.CODE_LEN and (new_value == "" or new_value.isdigit()):
+            return True
+        return False
 
     def create_buttons(self):
         """Create the digital buttons & control buttons"""
@@ -45,127 +168,21 @@ class KeypadLock(tk.Toplevel):
 
     def handle_digit(self, digit):
         """Process numeric input"""
-        if len(self.code) >= 4:
-            return
-        self.code += digit
-        self.label_display.config(text=self.code, fg="black")
+        self.entry.insert(tk.END, digit)
 
     def handle_back(self):
         """Delete the last character"""
-        self.code = self.code[:-1]
-        self.label_display.config(text=self.code)
+        self.entry.delete(len(self.entry.get()) - 1, tk.END)
 
     def handle_enter(self):
         """Check the code for correctness"""
-        if self.code == self.CORRECT_CODE:
-            self.label_display.config(text="Вірно!", fg="green")
+        if self.entry.get() == self.CORRECT_CODE:
+            self.master.unlock()
+            self.destroy()
         else:
-            self.label_display.config(text="Невірно!", fg="red")
-        self.code = ""
-
-
-class App(tk.Tk):
-    def __init__(self):
-        super().__init__()
-
-        self.title("Додаток")
-        self.geometry("400x300")
-
-        # Створення фреймів для різних сторінок
-        self.login_frame = tk.Frame(self)
-        self.main_menu_frame = tk.Frame(self)
-
-        # Налаштування сторінки входу
-        self.setup_login_page()
-
-        # Показати сторінку входу при запуску
-        self.show_login_page()
-
-    def setup_login_page(self):
-        # Очищення фрейму
-        for widget in self.login_frame.winfo_children():
-            widget.destroy()
-
-        # Напис по середині
-        login_label = tk.Label(
-            self.login_frame,
-            text="Вхід",
-            font=("Arial", 16)
-        )
-        login_label.pack(expand=True)
-
-        # Кнопка увійти
-        login_button = tk.Button(
-            self.login_frame,
-            text="Увійти",
-            command=self.show_main_menu
-        )
-        login_button.pack(expand=True)
-
-    def setup_main_menu_page(self):
-        # Очищення фрейму
-        for widget in self.main_menu_frame.winfo_children():
-            widget.destroy()
-
-        # Напис головне меню
-        main_menu_label = tk.Label(
-            self.main_menu_frame,
-            text="Головне Меню",
-            font=("Arial", 16)
-        )
-        main_menu_label.pack(expand=True)
-
-        # Напис з цифрами
-        numbers_label = tk.Label(
-            self.main_menu_frame,
-            text="1 2 3 4",
-            font=("Arial", 14)
-        )
-        numbers_label.pack(expand=True)
-
-        # Поле для вводу
-        input_entry = tk.Entry(
-            self.main_menu_frame,
-            width=30
-        )
-        input_entry.pack(expand=True)
-
-        # Кнопка зберегти
-        save_button = tk.Button(
-            self.main_menu_frame,
-            text="Зберегти",
-            command=self.save_data
-        )
-        save_button.pack(expand=True)
-
-        # Кнопка виходу
-        logout_button = tk.Button(
-            self.main_menu_frame,
-            text="Вийти",
-            command=self.show_login_page
-        )
-        logout_button.pack(expand=True)
-
-    def show_login_page(self):
-        # Сховати головне меню
-        self.main_menu_frame.pack_forget()
-
-        # Показати сторінку входу
-        self.login_frame.pack(expand=True, fill=tk.BOTH)
-
-    def show_main_menu(self):
-        # Сховати сторінку входу
-        self.login_frame.pack_forget()
-
-        # Створити та показати головне меню
-        self.setup_main_menu_page()
-        self.main_menu_frame.pack(expand=True, fill=tk.BOTH)
-
-    def save_data(self):
-        # Приклад функції збереження (можна змінити)
-        messagebox.showinfo("Збережено", "Дані успішно збережено!")
+            messagebox.showwarning("Warning", f"Incorrect pin code!")
 
 
 if __name__ == "__main__":
-    app = App()
+    app = Application()
     app.mainloop()

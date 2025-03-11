@@ -19,6 +19,9 @@ class Application(tk.Tk):
             "end": {"frame": tk.Frame(self), "widgets": []}
         }
 
+        # win setting
+        self.title("Quiz")
+
         # variables
         self.entry_var = tk.StringVar()
         self.radiobutton_var = tk.StringVar()

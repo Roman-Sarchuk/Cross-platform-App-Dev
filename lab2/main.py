@@ -239,8 +239,9 @@ class Application(tk.Tk):
     def get_values(self) -> str:
         self.quantity = dict.fromkeys(self.VALUES, 0)
 
-        if self.entry_var.get() in self.quantity:
-            self.quantity[self.entry_var.get()] += 1
+        entry_var = self.entry_var.get().strip().capitalize()
+        if entry_var in self.quantity:
+            self.quantity[entry_var] += 1
 
         self.quantity[self.radiobutton_var.get()] += 1
 

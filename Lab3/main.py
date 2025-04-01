@@ -1,5 +1,3 @@
-from typing import Mapping
-
 from tinydb import TinyDB, Query
 import tkinter as tk
 from tkinter import ttk
@@ -53,6 +51,35 @@ class AppDBHandler(TinyDB):
         self.work_tabel.truncate()
 
 
+class TestAppFunc:
+    def __init__(self, root: tk.Tk, db: TinyDB, tree: ttk.Treeview, rand_variable: tuple):
+        self.db = db
+        self.tree = tree
+        self.rand_variable = rand_variable
+
+        root.bind("<r>", self.insert_rand_handler)
+        root.bind("<Delete>", self.clear_db_handler)
+
+    def insert_rand_handler(self, event):
+        records = self.db.insert_rand(5, self.rand_variable)
+
+        for values in records:
+            self.tree.insert("", "end", values=values)
+
+        messagebox.showinfo("Random inserting...", f"Records insert successfully:\n{records}")
+
+    def clear_db_handler(self, event):
+        if not messagebox.askyesno("DB clearing...", "Are you sure you want to delete all records?"):
+            return
+
+        self.db.clear()
+
+        for item in self.tree.get_children():
+            self.tree.delete(item)
+
+        messagebox.showinfo("DB clearing...", f"Records deleted successfully!")
+
+
 class Application(tk.Tk):
     FILE_NAME = "CatalogDB.json"
     FIELDS = {"name": str, "price": int, "status": str}
@@ -73,8 +100,7 @@ class Application(tk.Tk):
         self.title = "CatalogDB"
         style = ttk.Style()
         style.theme_use('clam')
-        self.bind("<Return>", self.insert_rand_handler)
-        self.bind("<Delete>", self.clear_db_handler)
+        vcmd = (self.register(self.__validate_price), "%P")
 
         # vars
         self.vars = dict(zip(self.FIELDS.keys(), (tk.StringVar(), tk.IntVar(), tk.StringVar())))
@@ -135,15 +161,18 @@ class Application(tk.Tk):
 
         scale_lb_min = ttk.Label(frame_scale, text=str(self.MIN_SCALE))
         scale_lb_min.grid(row=0, column=0)
-        scale_lb_cur = ttk.Label(frame_scale, text=str(self.MIN_SCALE))
-        scale_lb_cur.grid(row=0, column=1)
+        scale_entry_cur = ttk.Entry(
+            frame_scale, textvariable=self.vars["price"],
+            width=8, justify="center",
+            validate="key", validatecommand=vcmd)
+        scale_entry_cur.grid(row=0, column=1)
         scale_lb_max = ttk.Label(frame_scale, text=str(self.MAX_SCALE))
         scale_lb_max.grid(row=0, column=2)
         scale_slider = ttk.Scale(
-            frame_scale, variable=self.vars["price"], style="Custom.Horizontal.TScale",
+            frame_scale, style="Custom.Horizontal.TScale",
             orient=tk.HORIZONTAL, length=150,
             from_=self.MIN_SCALE, to=self.MAX_SCALE,
-            command=lambda val: scale_lb_cur.config(text=f"{float(val):.0f}")
+            command=lambda val: self.vars["price"].set(int(float(val)))
         )
         scale_slider.grid(row=1, column=0, columnspan=3)
         # -- --- -- ----- --
@@ -165,6 +194,28 @@ class Application(tk.Tk):
                        command=func
                        ).grid(row=0, column=i, padx=5)
         # ----- --- -- ------- ----- -----
+
+        # Adding test functionality
+        TestAppFunc(self, self.db, self.tree, self.RAND_VARIABLES)
+
+    def __validate_price(self, new_value):
+        if not new_value:
+            self.vars["price"].set(self.MIN_SCALE)
+            return False
+
+        if new_value.isdigit():
+            num = int(new_value)
+
+            if num < self.MIN_SCALE:
+                self.vars["price"].set(self.MIN_SCALE)
+                return False
+            elif num > self.MAX_SCALE:
+                self.vars["price"].set(self.MAX_SCALE)
+                return False
+
+            return self.MIN_SCALE <= num <= self.MAX_SCALE
+
+        return False
 
     def insert_handler(self):
         # getting
@@ -215,22 +266,6 @@ class Application(tk.Tk):
 
         for field_name, var in self.vars.items():
             self.tree.set(selection[0], column=field_name, value=var.get())
-
-    def insert_rand_handler(self, event):
-        records = self.db.insert_rand(5, self.RAND_VARIABLES)
-
-        for values in records:
-            self.tree.insert("", "end", values=values)
-
-        messagebox.showinfo("Random inserting...", f"Records insert successfully:\n{records}")
-
-    def clear_db_handler(self, event):
-        self.db.clear()
-
-        for item in self.tree.get_children():
-            self.tree.delete(item)
-
-        messagebox.showinfo("DB clearing...", f"Records deleted successfully!")
 
     def load_data(self):
         # clear table

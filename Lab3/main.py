@@ -5,11 +5,10 @@ from tkinter import messagebox
 from random import randint, choice as rand_choice
 
 
-class AppDBHandler(TinyDB):
-    def __init__(self, path, window, fields):
+class DBHandler(TinyDB):
+    def __init__(self, path, fields):
         super().__init__(path)
         self.work_tabel = self.table("_default")
-        self.window = window
         self.fields = fields    # {field_name: field_type, ...}
 
     def insert(self, values):
@@ -47,23 +46,44 @@ class AppDBHandler(TinyDB):
 
         return records
 
+    def get_matching_records(self, document: dict):
+        if not document or len(document) == 0:
+            return
+
+        query = Query()
+        query_condition = None
+
+        for key, value in document.items():
+            # converting
+            if isinstance(value, str) and value.isdigit():
+                value = int(value)
+            # For the first condition, just set it
+            if query_condition is None:
+                query_condition = (getattr(query, key) == value)
+            # For subsequent conditions, combine with AND logic
+            else:
+                query_condition &= (getattr(query, key) == value)
+
+        return self.work_tabel.search(query_condition)
+
     def clear(self):
         self.work_tabel.truncate()
 
 
 class TestAppFunc:
-    def __init__(self, root: tk.Tk, db: TinyDB, tree: ttk.Treeview, rand_variable: tuple):
+    def __init__(self, root: tk.Tk, db: DBHandler, tree: ttk.Treeview, rand_variable: tuple):
         self.db = db
         self.tree = tree
         self.rand_variable = rand_variable
 
-        root.bind("<r>", self.insert_rand_handler)
-        root.bind("<Delete>", self.clear_db_handler)
+        root.bind("<Control-p>", self.insert_rand_handler)
+        root.bind("<Control-Delete>", self.clear_db_handler)
 
     def insert_rand_handler(self, event):
         records = self.db.insert_rand(5, self.rand_variable)
 
         for values in records:
+            #self.db.insert(values)
             self.tree.insert("", "end", values=values)
 
         messagebox.showinfo("Random inserting...", f"Records insert successfully:\n{records}")
@@ -83,21 +103,24 @@ class TestAppFunc:
 class Application(tk.Tk):
     FILE_NAME = "CatalogDB.json"
     FIELDS = {"name": str, "price": int, "status": str}
+    TREE_FIELD_NAMES = ["Назва", "Ціна", "Статус"]
+    STATUSES = ["В наявності", "Продано", "Очікується", "Резерв", "Списано", "У ремонті", "Пошкоджений"]
     MIN_SCALE = 100
     MAX_SCALE = 20000
-    STATUSES = ["В наявності", "Продано", "Очікується", "Резерв", "Списано", "У ремонті", "Пошкоджений"]
     RAND_VARIABLES = ("Ігровий Контролер", 100, STATUSES)
 
     def __init__(self):
         super().__init__()
-        self.db = AppDBHandler(self.FILE_NAME, self, self.FIELDS)
+        self.db = DBHandler(self.FILE_NAME, self.FIELDS)
 
         # validate
         if len(self.RAND_VARIABLES) != len(self.FIELDS):
             raise AttributeError("'RAND_VARIABLES' doesn't have the same length as 'FIELDS'!")
+        if len(self.TREE_FIELD_NAMES) != len(self.FIELDS):
+            raise AttributeError("'TREE_FIELD_NAMES' doesn't have the same length as 'FIELDS'!")
 
         # root setting
-        self.title = "CatalogDB"
+        self.title("CatalogDB")
         style = ttk.Style()
         style.theme_use('clam')
         vcmd = (self.register(self.__validate_price), "%P")
@@ -122,20 +145,16 @@ class Application(tk.Tk):
 
         self.tree = ttk.Treeview(
             frame_tree,
-            columns=("name", "price", "status"),
+            columns=tuple(self.FIELDS.keys()),
             show="headings",
-            selectmode="browse",
             height=10,
             yscrollcommand=scrollbar.set,
         )
 
-        self.tree.heading("name", text="Назва", anchor="w")
-        self.tree.heading("price", text="Ціна", anchor="w")
-        self.tree.heading("status", text="Статус", anchor="w")
-
-        self.tree.column("name", width=295, anchor="w", stretch=True)
-        self.tree.column("price", width=75, anchor="w", stretch=False)
-        self.tree.column("status", width=100, anchor="w", stretch=True)
+        for i, field_name in enumerate(self.FIELDS.keys()):
+            print(i == 0 or i == len(self.FIELDS) - 1)
+            self.tree.heading(field_name, text=self.TREE_FIELD_NAMES[i], anchor='w')
+            self.tree.column(field_name, width=160, anchor="w", stretch=(i == 0 or i == len(self.FIELDS) - 1))
 
         self.tree.pack()
 
@@ -161,15 +180,18 @@ class Application(tk.Tk):
 
         scale_lb_min = ttk.Label(frame_scale, text=str(self.MIN_SCALE))
         scale_lb_min.grid(row=0, column=0)
+
         scale_entry_cur = ttk.Entry(
             frame_scale, textvariable=self.vars["price"],
             width=8, justify="center",
             validate="key", validatecommand=vcmd)
         scale_entry_cur.grid(row=0, column=1)
+
         scale_lb_max = ttk.Label(frame_scale, text=str(self.MAX_SCALE))
         scale_lb_max.grid(row=0, column=2)
+
         scale_slider = ttk.Scale(
-            frame_scale, style="Custom.Horizontal.TScale",
+            frame_scale, variable=self.vars["price"],
             orient=tk.HORIZONTAL, length=150,
             from_=self.MIN_SCALE, to=self.MAX_SCALE,
             command=lambda val: self.vars["price"].set(int(float(val)))
@@ -238,8 +260,17 @@ class Application(tk.Tk):
         if not selection:
             return
 
+        deleted_records = []
         for item in selection:
+            values = self.tree.item(item, "values")  # Get values as tuple
+            matching_records = self.db.get_matching_records(dict(zip(self.FIELDS.keys(), values)))
+            first_record_id = matching_records[0].doc_id  # Get the unique doc_id
+            self.db.remove(doc_ids=[first_record_id])  # Delete the record by doc_id
+
             self.tree.delete(item)
+            deleted_records.append(values)
+
+        messagebox.showinfo("Deleting...", f"Such records were deleted:\n{deleted_records}")
 
     def get_item_handler(self):
         selection = self.tree.selection()
@@ -258,14 +289,23 @@ class Application(tk.Tk):
         if not selection:
             return
 
+        values = self.tree.item(selection[0], "values")
         # validate
+        new_values = []
         for field_name, var in self.vars.items():
-            if not var.get():
+            new_values.append(var.get())
+            if not new_values[-1]:
                 messagebox.showwarning("Setting...", f"The '{field_name}' can't be empty")
                 return
 
+        # setting
+        matching_records = self.db.get_matching_records(dict(zip(self.FIELDS.keys(), values)))
+        first_record_id = matching_records[0].doc_id  # Get the unique doc_id
+        self.db.update(dict(zip(self.FIELDS.keys(), new_values)), doc_ids=[first_record_id])
         for field_name, var in self.vars.items():
             self.tree.set(selection[0], column=field_name, value=var.get())
+
+        messagebox.showinfo("Setting...", f"For record '{values}' was set this value '{new_values}'")
 
     def load_data(self):
         # clear table

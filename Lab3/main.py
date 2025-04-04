@@ -70,7 +70,7 @@ class DBHandler(TinyDB):
         self.work_tabel.truncate()
 
 
-class TestAppFunc:
+class AppTreeDBTestUtils:
     def __init__(self, root: tk.Tk, db: DBHandler, tree: ttk.Treeview, rand_variable: tuple):
         self.db = db
         self.tree = tree
@@ -152,7 +152,6 @@ class Application(tk.Tk):
         )
 
         for i, field_name in enumerate(self.FIELDS.keys()):
-            print(i == 0 or i == len(self.FIELDS) - 1)
             self.tree.heading(field_name, text=self.TREE_FIELD_NAMES[i], anchor='w')
             self.tree.column(field_name, width=160, anchor="w", stretch=(i == 0 or i == len(self.FIELDS) - 1))
 
@@ -171,8 +170,8 @@ class Application(tk.Tk):
         lb_status = ttk.Label(frame_data, text="Status:")
         lb_status.grid(row=0, column=2, sticky='w', padx=10)
 
-        entry = ttk.Entry(frame_data, textvariable=self.vars["name"])
-        entry.grid(row=1, column=0, padx=10)
+        entry_name = ttk.Entry(frame_data, textvariable=self.vars["name"])
+        entry_name.grid(row=1, column=0, padx=10)
 
         # -- Set up scale --
         frame_scale = ttk.Frame(frame_data)
@@ -181,11 +180,11 @@ class Application(tk.Tk):
         scale_lb_min = ttk.Label(frame_scale, text=str(self.MIN_SCALE))
         scale_lb_min.grid(row=0, column=0)
 
-        scale_entry_cur = ttk.Entry(
+        self.scale_entry_cur = ttk.Entry(
             frame_scale, textvariable=self.vars["price"],
             width=8, justify="center",
             validate="key", validatecommand=vcmd)
-        scale_entry_cur.grid(row=0, column=1)
+        self.scale_entry_cur.grid(row=0, column=1)
 
         scale_lb_max = ttk.Label(frame_scale, text=str(self.MAX_SCALE))
         scale_lb_max.grid(row=0, column=2)
@@ -218,26 +217,14 @@ class Application(tk.Tk):
         # ----- --- -- ------- ----- -----
 
         # Adding test functionality
-        TestAppFunc(self, self.db, self.tree, self.RAND_VARIABLES)
+        AppTreeDBTestUtils(self, self.db, self.tree, self.RAND_VARIABLES)
 
-    def __validate_price(self, new_value):
+    @staticmethod
+    def __validate_price(new_value):
         if not new_value:
-            self.vars["price"].set(self.MIN_SCALE)
             return False
 
-        if new_value.isdigit():
-            num = int(new_value)
-
-            if num < self.MIN_SCALE:
-                self.vars["price"].set(self.MIN_SCALE)
-                return False
-            elif num > self.MAX_SCALE:
-                self.vars["price"].set(self.MAX_SCALE)
-                return False
-
-            return self.MIN_SCALE <= num <= self.MAX_SCALE
-
-        return False
+        return new_value.isdigit()
 
     def insert_handler(self):
         # getting

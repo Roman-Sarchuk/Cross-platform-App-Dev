@@ -43,7 +43,7 @@ class DBHandler(TinyDB):
                         values.append(randint(var[min], var[max]))
                     elif isinstance(var["min"], float) and isinstance(var["max"], float):
                         number = rand_uniform(var["min"], var["max"])
-                        values.append(round(number, var.get("fraction_digits", 2)))
+                        values.append(round(number, var.get("_fraction_digits", 2)))
 
             records.append(values)
             self.insert(values)
@@ -111,7 +111,7 @@ class AppTreeDBTestUtils:
 
 
 class EntryScale(ttk.Frame):
-    _allowed_kwargs = {"min_value", "max_value", "entry_width", "scale_length", "fraction_digits", "variable", "show_set_button"}
+    _allowed_kwargs = {"min_value", "max_value", "entry_width", "scale_length", "_fraction_digits", "variable", "_show_button"}
 
     def __init__(self, master=None, **kwargs):
         custom_kwargs = {k: v for k, v in kwargs.items() if k in self._allowed_kwargs}
@@ -129,8 +129,8 @@ class EntryScale(ttk.Frame):
         # base value initialisation
         entry_width = custom_kwargs.get("entry_width", 8)
         scale_length = custom_kwargs.get("scale_length", 150)
-        self.show_set_button = custom_kwargs.get("show_set_button", False)
-        self.fraction_digits = custom_kwargs.get("fraction_digits", 2)
+        self.show_set_button = custom_kwargs.get("_show_button", False)
+        self.fraction_digits = custom_kwargs.get("_fraction_digits", 2)
 
         # interface building
         lb_min = ttk.Label(self, textvariable=self.min_var)
@@ -141,7 +141,7 @@ class EntryScale(ttk.Frame):
         self.entry_cur.grid(row=0, column=1)
         self.entry_cur.bind("<FocusOut>", self.__on_entry_focus_out)
         self.entry_cur.bind("<Return>", self.__on_entry_focus_out)
-        # Also "<FocusIn>" is bound if show_set_button is True
+        # Also "<FocusIn>" is bound if _show_button is True
 
         lb_max = ttk.Label(self, textvariable=self.max_var)
         lb_max.grid(row=0, column=2)
@@ -154,7 +154,7 @@ class EntryScale(ttk.Frame):
         )
         self.scale.grid(row=1, column=0, columnspan=3, pady=4)
 
-        # Also 'self.button_set' is created if show_set_button is True
+        # Also 'self._button_set' is created if _show_button is True
 
         # end of init
         if self.show_set_button:
@@ -186,8 +186,8 @@ class EntryScale(ttk.Frame):
             if "scale_length" in custom_kwargs:
                 self.scale.config(length=custom_kwargs["scale_length"])
 
-            if "fraction_digits" in custom_kwargs:
-                self.fraction_digits = custom_kwargs["fraction_digits"]
+            if "_fraction_digits" in custom_kwargs:
+                self.fraction_digits = custom_kwargs["_fraction_digits"]
 
             if "variable" in custom_kwargs and isinstance(kwargs["variable"], tk.Variable):
                 self.cur_var = kwargs["variable"]

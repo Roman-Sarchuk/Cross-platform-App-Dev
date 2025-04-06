@@ -2,7 +2,7 @@ from tinydb import TinyDB, Query
 import tkinter as tk
 from tkinter import ttk
 from tkinter import messagebox
-from random import randint, choice as rand_choice
+from random import randint, choice as rand_choice, uniform as rand_uniform
 
 
 class DBHandler(TinyDB):
@@ -36,10 +36,14 @@ class DBHandler(TinyDB):
             for var in variables:
                 if isinstance(var, str):
                     values.append(var + str(randint(0, 50)))
-                elif isinstance(var, int):
-                    values.append(randint(var, var + 5000))
                 elif isinstance(var, list) or isinstance(var, tuple):
                     values.append(rand_choice(var))
+                elif isinstance(var, dict) and "min" in var and "max" in var:
+                    if isinstance(var["min"], int) and isinstance(var["max"], int):
+                        values.append(randint(var[min], var[max]))
+                    elif isinstance(var["min"], float) and isinstance(var["max"], float):
+                        number = rand_uniform(var["min"], var["max"])
+                        values.append(round(number, var.get("fraction_digits", 2)))
 
             records.append(values)
             self.insert(values)
@@ -55,8 +59,14 @@ class DBHandler(TinyDB):
 
         for key, value in document.items():
             # converting
-            if isinstance(value, str) and value.isdigit():
-                value = int(value)
+            if isinstance(value, str):
+                try:
+                    value = int(value)
+                except ValueError:
+                    try:
+                        value = float(value)
+                    except ValueError:
+                        pass
             # For the first condition, just set it
             if query_condition is None:
                 query_condition = (getattr(query, key) == value)
@@ -100,14 +110,146 @@ class AppTreeDBTestUtils:
         messagebox.showinfo("DB clearing...", f"Records deleted successfully!")
 
 
+class EntryScale(ttk.Frame):
+    _allowed_kwargs = {"min_value", "max_value", "entry_width", "scale_length", "fraction_digits", "variable", "show_set_button"}
+
+    def __init__(self, master=None, **kwargs):
+        custom_kwargs = {k: v for k, v in kwargs.items() if k in self._allowed_kwargs}
+        frame_kwargs = {k: v for k, v in kwargs.items() if k not in self._allowed_kwargs}
+
+        super().__init__(master, **frame_kwargs)
+
+        # vars
+        self.min_var = tk.DoubleVar(value=custom_kwargs.get("min_value", 0))
+        self.max_var = tk.DoubleVar(value=custom_kwargs.get("max_value", 100))
+        self.cur_var = custom_kwargs.get("variable", tk.DoubleVar())
+        self.cur_var.set((self.min_var.get()+self.max_var.get())/2)
+        self.cur_var.trace_add("write", self.__validate_cur_var)
+
+        # base value initialisation
+        entry_width = custom_kwargs.get("entry_width", 8)
+        scale_length = custom_kwargs.get("scale_length", 150)
+        self.show_set_button = custom_kwargs.get("show_set_button", False)
+        self.fraction_digits = custom_kwargs.get("fraction_digits", 2)
+
+        # interface building
+        lb_min = ttk.Label(self, textvariable=self.min_var)
+        lb_min.grid(row=0, column=0)
+
+        self.entry_cur = ttk.Entry(self, width=entry_width, justify="center")
+        self.entry_cur.insert(0, str(self.cur_var.get()))
+        self.entry_cur.grid(row=0, column=1)
+        self.entry_cur.bind("<FocusOut>", self.__on_entry_focus_out)
+        self.entry_cur.bind("<Return>", self.__on_entry_focus_out)
+        # Also "<FocusIn>" is bound if show_set_button is True
+
+        lb_max = ttk.Label(self, textvariable=self.max_var)
+        lb_max.grid(row=0, column=2)
+
+        self.scale = ttk.Scale(
+            self, variable=self.cur_var,
+            orient=tk.HORIZONTAL, length=scale_length,
+            from_=self.min_var.get(), to=self.max_var.get(),
+            command=self.__on_scale_move
+        )
+        self.scale.grid(row=1, column=0, columnspan=3, pady=4)
+
+        # Also 'self.button_set' is created if show_set_button is True
+
+        # end of init
+        if self.show_set_button:
+            self.button_set = ttk.Button(self, text="", state=tk.DISABLED)
+            self.button_set.grid(row=2, column=0, columnspan=3)
+            self.entry_cur.bind("<FocusIn>", self.__on_entry_focus_in)
+
+        if frame_kwargs:
+            super().config(**frame_kwargs)
+
+    def config(self, **kwargs):
+        custom_kwargs = {k: v for k, v in kwargs.items() if k in self._allowed_kwargs}
+        frame_kwargs = {k: v for k, v in kwargs.items() if k not in self._allowed_kwargs}
+
+        if custom_kwargs:
+            self._validate_custom_kwargs(custom_kwargs)
+
+            if "min_value" in custom_kwargs:
+                self.min_var.set(custom_kwargs["min_value"])
+                self.scale.config(from_=custom_kwargs["min_value"])
+
+            if "max_value" in custom_kwargs:
+                self.max_var.set(custom_kwargs["max_value"])
+                self.scale.config(to=custom_kwargs["max_value"])
+
+            if "entry_width" in custom_kwargs:
+                self.entry_cur.config(width=custom_kwargs["entry_width"])
+
+            if "scale_length" in custom_kwargs:
+                self.scale.config(length=custom_kwargs["scale_length"])
+
+            if "fraction_digits" in custom_kwargs:
+                self.fraction_digits = custom_kwargs["fraction_digits"]
+
+            if "variable" in custom_kwargs and isinstance(kwargs["variable"], tk.Variable):
+                self.cur_var = kwargs["variable"]
+
+        if frame_kwargs:
+            super().config(**frame_kwargs)
+
+    def _validate_custom_kwargs(self, kwargs):
+        for key in kwargs:
+            if key not in self._allowed_kwargs:
+                allowed = ', '.join(sorted(self._allowed_kwargs))
+                raise ValueError(f"This custom parameters '{key}' are not allowed.\n\tAllowed parameters: {allowed}")
+
+    def __validate_cur_var(self, *args):
+        try:
+            # Get the current value from the DoubleVar
+            current = self.cur_var.get()
+
+            # Format to 2 decimal places
+            formatted = float(f"{current:.{self.fraction_digits}f}")
+
+            # Check if within bounds
+            if formatted < self.min_var.get():
+                self.cur_var.set(self.min_var.get())
+            elif formatted > self.max_var.get():
+                self.cur_var.set(self.max_var.get())
+            else:
+                self.cur_var.set(formatted)
+        except:
+            # If the entry contains invalid text, reset to min value
+            self.cur_var.set(self.min_var.get())
+        self.entry_cur.delete(0, tk.END)  # Clear the entry
+        self.entry_cur.insert(0, str(self.cur_var.get()))  # Insert new text
+
+    def __on_scale_move(self, value):
+        # Format the value to have 2 decimal places and update DoubleVar
+        formatted_value = float(f"{float(value):.2f}")
+        self.cur_var.set(formatted_value)
+
+    def __on_entry_focus_in(self, event):
+        self.button_set.config(text="set", state=tk.NORMAL)
+
+    def __on_entry_focus_out(self, event):
+        # Ensure proper formatting when leaving the entry field
+        try:
+            current = float(self.entry_cur.get())
+            formatted = float(f"{current:.2f}")
+            self.cur_var.set(formatted)
+        except:
+            self.cur_var.set(self.min_var.get())
+        if self.show_set_button:
+            self.button_set.config(text="", state=tk.DISABLED)
+
+
 class Application(tk.Tk):
     FILE_NAME = "CatalogDB.json"
-    FIELDS = {"name": str, "price": int, "status": str}
+    FIELDS = {"name": str, "price": float, "status": str}
     TREE_FIELD_NAMES = ["Назва", "Ціна", "Статус"]
     STATUSES = ["В наявності", "Продано", "Очікується", "Резерв", "Списано", "У ремонті", "Пошкоджений"]
-    MIN_SCALE = 100
-    MAX_SCALE = 20000
-    RAND_VARIABLES = ("Ігровий Контролер", 100, STATUSES)
+    MIN_PRICE = 100.0
+    MAX_PRICE = 20000.0
+    RAND_VARIABLES = ("Ігровий Контролер", {"min": MIN_PRICE, "max": MAX_PRICE}, STATUSES)
 
     def __init__(self):
         super().__init__()
@@ -123,11 +265,10 @@ class Application(tk.Tk):
         self.title("CatalogDB")
         style = ttk.Style()
         style.theme_use('clam')
-        vcmd = (self.register(self.__validate_price), "%P")
 
         # vars
-        self.vars = dict(zip(self.FIELDS.keys(), (tk.StringVar(), tk.IntVar(), tk.StringVar())))
-        self.vars["price"].set(self.MIN_SCALE)
+        self.vars = dict(zip(self.FIELDS.keys(), (tk.StringVar(), tk.DoubleVar(), tk.StringVar())))
+        self.vars["price"].set(self.MIN_PRICE)
         self.vars["status"].set(self.STATUSES[0])
 
         # ----- Frame initialisation -----
@@ -173,30 +314,12 @@ class Application(tk.Tk):
         entry_name = ttk.Entry(frame_data, textvariable=self.vars["name"])
         entry_name.grid(row=1, column=0, padx=10)
 
-        # -- Set up scale --
-        frame_scale = ttk.Frame(frame_data)
-        frame_scale.grid(row=1, column=1, padx=10)
-
-        scale_lb_min = ttk.Label(frame_scale, text=str(self.MIN_SCALE))
-        scale_lb_min.grid(row=0, column=0)
-
-        self.scale_entry_cur = ttk.Entry(
-            frame_scale, textvariable=self.vars["price"],
-            width=8, justify="center",
-            validate="key", validatecommand=vcmd)
-        self.scale_entry_cur.grid(row=0, column=1)
-
-        scale_lb_max = ttk.Label(frame_scale, text=str(self.MAX_SCALE))
-        scale_lb_max.grid(row=0, column=2)
-
-        scale_slider = ttk.Scale(
-            frame_scale, variable=self.vars["price"],
-            orient=tk.HORIZONTAL, length=150,
-            from_=self.MIN_SCALE, to=self.MAX_SCALE,
-            command=lambda val: self.vars["price"].set(int(float(val)))
+        scale_slider = EntryScale(
+            frame_data, variable=self.vars["price"],
+            min_value=self.MIN_PRICE, max_value=self.MAX_PRICE,
+            show_set_button=True
         )
-        scale_slider.grid(row=1, column=0, columnspan=3)
-        # -- --- -- ----- --
+        scale_slider.grid(row=1, column=1, padx=10)
 
         combo_status = ttk.Combobox(frame_data, textvariable=self.vars["status"], values=self.STATUSES, state="read")
         combo_status.grid(row=1, column=2, padx=10)
@@ -218,13 +341,6 @@ class Application(tk.Tk):
 
         # Adding test functionality
         AppTreeDBTestUtils(self, self.db, self.tree, self.RAND_VARIABLES)
-
-    @staticmethod
-    def __validate_price(new_value):
-        if not new_value:
-            return False
-
-        return new_value.isdigit()
 
     def insert_handler(self):
         # getting

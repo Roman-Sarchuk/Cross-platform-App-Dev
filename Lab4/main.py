@@ -136,7 +136,6 @@ class EntryScale(ttk.Frame):
 
 
 class Application(tk.Tk):
-    NUMBER_COUNT = 3
     START_COLOR = "#025669"
     MIN_WEIGHT = 1
     MAX_WEIGHT = 10

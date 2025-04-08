@@ -165,6 +165,7 @@ class WidgetConfigMenu(tk.Toplevel):
 
         # --- win setting ---
         self.title(f"{self.widget.widgetName.capitalize()} Config")
+        self.resizable(width=False, height=False)
         self.transient(master)
         self.grab_set()
 
@@ -387,3 +388,8 @@ class Application(tk.Tk):
 if __name__ == "__main__":
     app = Application()
     app.mainloop()
+
+
+
+
+

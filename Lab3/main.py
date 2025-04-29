@@ -317,7 +317,7 @@ class Application(tk.Tk):
         scale_slider = EntryScale(
             frame_data, variable=self.vars["price"],
             min_value=self.MIN_PRICE, max_value=self.MAX_PRICE,
-            show_set_button=True
+            
         )
         scale_slider.grid(row=1, column=1, padx=10)
 

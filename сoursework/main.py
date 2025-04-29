@@ -227,7 +227,7 @@ class DatabaseInitializer(Singleton):
     def close(self):
         if self.connection:
             self.connection.close()
-            self._log_info(f"[{self.__class__.__name__}]: 🔒 Підключення до БД закрито.")  # TODO: Debug.log
+            self._log_info(f"[{self.__class__.__name__}]: 🔒 Підключення до БД закрито.")
 
     def _log_info(self, text):
         if self.is_info_logging:

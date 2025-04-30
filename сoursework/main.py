@@ -18,13 +18,22 @@ class Singleton:
         return cls._instance
 
 
+# ~~~~~~~~~~~~~~~ BACKEND ~~~~~~~~~~~~~~~
+DB_NAME = "data.db"
+
+
+class TableName(Enum):
+    DEFAULT = "workspace"
+    USER_ROLES = "user_roles"
+    USERS = "users"
+    OPERATION_TYPES = "operation_types"
+    LOGS = "logs"
+    SETTINGS = "settings"
+
+
 class SettingName(Enum):
     AUTHENTICATION = "authentication"
     LOGS = "logs"
-
-
-# ~~~~~~~~~~~~~~~ BACKEND ~~~~~~~~~~~~~~~
-DB_NAME = "data.db"
 
 
 class Encryptor(Singleton):
@@ -115,18 +124,18 @@ class SettingsHandler(Singleton):
 
 class DatabaseInitializer(Singleton):
     REQUIRED_TABLES = {
-        "workspace": '''
+        TableName.DEFAULT.value: '''
             CREATE TABLE IF NOT EXISTS workspace (
                 id INTEGER PRIMARY KEY NOT NULL UNIQUE
             );
         ''',
-        "user_roles": '''
+        TableName.USER_ROLES.value: '''
             CREATE TABLE IF NOT EXISTS user_roles (
                 id INTEGER PRIMARY KEY NOT NULL UNIQUE,
                 name TEXT NOT NULL UNIQUE
             );
         ''',
-        "users": '''
+        TableName.USERS.value: '''
             CREATE TABLE IF NOT EXISTS users (
                 id INTEGER PRIMARY KEY NOT NULL UNIQUE,
                 username TEXT NOT NULL,
@@ -137,13 +146,13 @@ class DatabaseInitializer(Singleton):
                 FOREIGN KEY(role_id) REFERENCES user_roles(id)
             );
         ''',
-        "operation_types": '''
+        TableName.OPERATION_TYPES.value: '''
             CREATE TABLE IF NOT EXISTS operation_types (
                 id INTEGER PRIMARY KEY NOT NULL UNIQUE,
                 name TEXT NOT NULL UNIQUE
             );
         ''',
-        "logs": '''
+        TableName.LOGS.value: '''
             CREATE TABLE IF NOT EXISTS logs (
                 id INTEGER PRIMARY KEY NOT NULL UNIQUE,
                 operation_type_id INTEGER NOT NULL,
@@ -154,7 +163,7 @@ class DatabaseInitializer(Singleton):
                 FOREIGN KEY(user_id) REFERENCES users(id)
             );
         ''',
-        "settings": '''
+        TableName.SETTINGS.value: '''
             CREATE TABLE IF NOT EXISTS settings (
                 key TEXT NOT NULL UNIQUE,
                 value TEXT NOT NULL

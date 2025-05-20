@@ -604,6 +604,7 @@ class MainMenu(ttk.Frame):
 
         self.field_names = self.users_handler.get_field_names()
         self.sort_directions = {col: None for col in self.field_names}  # None, True (ASC), False (DESC)
+        self.dragged_item = None
 
         self._build_interface()
 
@@ -629,6 +630,11 @@ class MainMenu(ttk.Frame):
             height=10,
             yscrollcommand=scrollbar.set,
         )
+        self.tree.bind("<ButtonPress-1>", self.__on_press)
+        self.tree.bind("<B1-Motion>", self.__on_drag)
+        self.tree.bind("<ButtonRelease-1>", self.__on_release)
+        self.tree.bind("<KeyPress-Page_Down>", lambda event: self.__on_move_up(True))
+        self.tree.bind("<KeyPress-Page_Up>", lambda event: self.__on_move_up(False))
 
         for field_name in self.field_names:
             self.tree.heading(field_name, text=field_name, anchor='w', command=lambda c=field_name: self.__handle_sort(c))
@@ -681,6 +687,39 @@ class MainMenu(ttk.Frame):
 
         self.sort_directions[col] = reverse
         self.tree.heading(col, text=f"{col.title()} {ARROWS[reverse]}")
+
+    def __on_press(self, event):
+        dragged = self.tree.identify_row(event.y)
+        if not dragged:
+            return
+
+        self.dragged_item = dragged
+        self.tree.selection_set(self.dragged_item)
+
+    def __on_drag(self, event):
+        if not self.dragged_item:
+            return
+
+        target = self.tree.identify_row(event.y)
+        if not target or target == self.dragged_item:
+            return
+
+        index = self.tree.index(target)
+        self.tree.move(self.dragged_item, "", index)
+
+    def __on_release(self, event=None):
+        self.dragged_item = None
+
+    def __on_move_up(self, is_down):
+        selected = self.tree.selection()
+        if not selected:
+            return
+
+        selected_item = selected[0]
+        index = self.tree.index(selected_item)
+        new_index = index + (1 if is_down else -1)
+        self.tree.move(selected_item, "", new_index)
+        self.tree.selection_set(selected_item)
 
     def __create_modal(self, title: str) -> tk.Toplevel:
         top_level = tk.Toplevel(self.controller)

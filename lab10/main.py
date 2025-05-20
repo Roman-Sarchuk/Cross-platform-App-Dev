@@ -489,7 +489,7 @@ class UsersHandler(Singleton):
         self.authenticated_user = None
 
     def get_authenticated_user_name(self):
-        return self.encryptor.decrypt_with_fernet(self.authenticated_user["username"]) if self.authenticated_user else None
+        return self.encryptor.decrypt_with_fernet(self.authenticated_user["username"]) if self.authenticated_user else ""
 
     def get_records(self):
         query = f"""
@@ -587,8 +587,8 @@ class Application(tk.Tk):
     def set_access_role(self, access_role):
         self.access_role = access_role
 
-    def get_access_role(self):
-        return self.access_role
+    def get_access_role(self) -> str:
+        return self.access_role if self.access_role else ""
 
     def is_authentication(self):
         return self.is_authentication_turn_on
@@ -663,6 +663,61 @@ class MainMenu(ttk.Frame):
         )
         # ----- --- -- ------- ----- -----
 
+    def load_data(self, event=None):
+        # clear table
+        for row in self.tree.get_children():
+            self.tree.delete(row)
+
+        # data getting from DB
+        records = self.users_handler.get_records()
+
+        # add records in the Treeview
+        for record in records:
+            self.tree.insert("", "end", values=[record[field] for field in self.field_names])
+
+    def update_frame(self, event=None):
+        if self.controller.is_authentication():
+            self.user_label.configure(text=self.users_handler.get_authenticated_user_name() + f" ({self.controller.get_access_role()})")
+            self.user_label.pack(side=tk.LEFT)
+            if self.controller.get_access_role() == DEFAULT_ADMIN_ROLE:
+                self.logout_button.pack(side=tk.RIGHT)
+                self.new_account_button.pack(side=tk.RIGHT)
+            else:
+                self.logout_button.pack(side=tk.RIGHT)
+                self.new_account_button.pack_forget()
+        else:
+            self.user_label.configure(text="ADMIN")
+            self.user_label.pack(side=tk.LEFT)
+            self.logout_button.pack_forget()
+            self.new_account_button.pack(side=tk.RIGHT)
+
+    # --- button binding ---
+    def __create_modal(self, title: str) -> tk.Toplevel:
+        top_level = tk.Toplevel(self.controller)
+
+        # top_level setting
+        top_level.title(title)
+        top_level.resizable(width=False, height=False)
+        top_level.transient(self.controller)
+        top_level.grab_set()
+
+        return top_level
+
+    def __on_new_account_clicked(self):
+        modal = self.__create_modal("Add Record")
+
+        frame = NewAccountMenu(parent=modal, controller=None, comm=lambda: self.__on_modal_new_account_created(modal))
+        frame.grid(row=0, column=0, sticky="nsew")
+
+    def __on_modal_new_account_created(self, modal):
+        modal.destroy()
+        self.load_data()
+
+    def __on_logout_clicked(self):
+        self.users_handler.logout_authenticated_user()
+        self.controller.open_start_menu()
+
+    # --- treeview binding ---
     def __handle_sort(self, col):
         current = self.sort_directions[col]
         reverse = not current if current is not None else False
@@ -720,63 +775,6 @@ class MainMenu(ttk.Frame):
         new_index = index + (1 if is_down else -1)
         self.tree.move(selected_item, "", new_index)
         self.tree.selection_set(selected_item)
-
-    def __create_modal(self, title: str) -> tk.Toplevel:
-        top_level = tk.Toplevel(self.controller)
-
-        # top_level setting
-        top_level.title(title)
-        top_level.resizable(width=False, height=False)
-        top_level.transient(self.controller)
-        top_level.grab_set()
-
-        return top_level
-
-    def load_data(self, event=None):
-        # clear table
-        for row in self.tree.get_children():
-            self.tree.delete(row)
-
-        # data getting from DB
-        records = self.users_handler.get_records()
-
-        # add records in the Treeview
-        for record in records:
-            self.tree.insert("", "end", values=[record[field] for field in self.field_names])
-
-    def update_frame(self, event=None):
-        if self.controller.is_authentication():
-            access_role = self.controller.get_access_role()
-            if access_role:
-                self.user_label.configure(text=self.users_handler.get_authenticated_user_name() + f" ({access_role})")
-            else:
-                self.user_label.configure(text=self.users_handler.get_authenticated_user_name())
-            self.user_label.pack(side=tk.LEFT)
-            if self.controller.get_access_role() == DEFAULT_ADMIN_ROLE:
-                self.logout_button.pack(side=tk.RIGHT)
-                self.new_account_button.pack(side=tk.RIGHT)
-            else:
-                self.logout_button.pack(side=tk.RIGHT)
-                self.new_account_button.pack_forget()
-        else:
-            self.user_label.configure(text="ADMIN")
-            self.user_label.pack(side=tk.LEFT)
-            self.logout_button.pack_forget()
-            self.new_account_button.pack(side=tk.RIGHT)
-
-    def __on_new_account_clicked(self):
-        modal = self.__create_modal("Add Record")
-
-        frame = NewAccountMenu(parent=modal, controller=None, comm=lambda: self.__on_modal_new_account_created(modal))
-        frame.grid(row=0, column=0, sticky="nsew")
-
-    def __on_logout_clicked(self):
-        self.users_handler.logout_authenticated_user()
-        self.controller.open_start_menu()
-
-    def __on_modal_new_account_created(self, modal):
-        modal.destroy()
-        self.load_data()
 
 
 class DataEntryForm(ttk.Frame):

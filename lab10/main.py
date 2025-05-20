@@ -417,6 +417,7 @@ class DatabaseInitializer(Singleton):
 
 class UsersHandler(Singleton):
     UNENCRYPTED_FIELDS = ["id", "password", "role_id", "login", "created_date"]
+    FIELDS = ["id", "username", "login", "password", "role", "created_date"]
 
     def __init__(self, db_path: str):
         if not self._initialized:
@@ -466,14 +467,15 @@ class UsersHandler(Singleton):
         return DEFAULT_USER_ROLE
 
     def get_field_names(self):
-        with sqlite3.connect(self.db_name) as conn:
-            cursor = conn.cursor()
-            query = f"PRAGMA table_info({TableName.USERS.value});"
-
-            cursor.execute(query)
-            columns_info = cursor.fetchall()    # cid | name | type | notnull | dflt_value | pk
-            column_names = [col[1] for col in columns_info]
-            return column_names
+        # with sqlite3.connect(self.db_name) as conn:
+        #     cursor = conn.cursor()
+        #     query = f"PRAGMA table_info({TableName.USERS.value});"
+        #
+        #     cursor.execute(query)
+        #     columns_info = cursor.fetchall()    # cid | name | type | notnull | dflt_value | pk
+        #     column_names = [col[1] for col in columns_info]
+        #     return column_names
+        return self.FIELDS
 
     def get_roles(self) -> dict[str, int]:
         role_rows = self.db_handler.get_rows(TableName.USER_ROLES)
@@ -490,7 +492,17 @@ class UsersHandler(Singleton):
         return self.encryptor.decrypt_with_fernet(self.authenticated_user["username"]) if self.authenticated_user else None
 
     def get_records(self):
-        records = self.db_handler.get_rows(TableName.USERS)
+        query = f"""
+        SELECT u.id, u.username, u.login,u.password, r.name as role, u.created_date FROM {TableName.USERS.value} as u 
+        JOIN {TableName.USER_ROLES.value} as r ON u.role_id=r.id;
+        """
+
+        with sqlite3.connect(self.db_name) as conn:
+            conn.row_factory = sqlite3.Row  # This enables column access by name
+            cursor = conn.cursor()
+            cursor.execute(query)
+            rows = cursor.fetchall()
+            records = [dict(row) for row in rows]
 
         for record in records:
             for key, value in record.items():
@@ -685,12 +697,16 @@ class MainMenu(ttk.Frame):
     def __on_new_account_clicked(self):
         modal = self.__create_modal("Add Record")
 
-        frame = NewAccountMenu(parent=modal, controller=None)
+        frame = NewAccountMenu(parent=modal, controller=None, comm=lambda: self.__on_modal_new_account_created(modal))
         frame.grid(row=0, column=0, sticky="nsew")
 
     def __on_logout_clicked(self):
         self.users_handler.logout_authenticated_user()
         self.controller.open_start_menu()
+
+    def __on_modal_new_account_created(self, modal):
+        modal.destroy()
+        self.load_data()
 
 
 class DataEntryForm(ttk.Frame):
@@ -866,10 +882,11 @@ class LoginMenu(ttk.Frame):
 
 
 class NewAccountMenu(ttk.Frame):
-    def __init__(self, parent, controller:Application=None, *args, **kwargs):
+    def __init__(self, parent, controller:Application=None, comm=None, *args, **kwargs):
         super().__init__(parent, *args, **kwargs)
         self.controller = controller
         self.parent = parent
+        self.comm_on_new_account = comm
         self.db_handler = DBHandler(DB_NAME)
         self.user_handler = UsersHandler(DB_NAME)
         self.is_first_account_mod = False
@@ -929,6 +946,9 @@ class NewAccountMenu(ttk.Frame):
         if self.controller:
             self.controller.event_generate("<<new_account_created>>")
             self.controller.go_back_menu()
+
+        if self.comm_on_new_account:
+            self.comm_on_new_account()
 
         if self.is_first_account_mod:
             self.turn_off_first_account_mod()

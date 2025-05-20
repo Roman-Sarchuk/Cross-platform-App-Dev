@@ -514,6 +514,8 @@ class UsersHandler(Singleton):
 # ~~~~~~~~~~~~~~~ ~~~~~~~ ~~~~~~~~~~~~~~~
 
 # ~~~~~~~~~~~~~~~ FRONTEND ~~~~~~~~~~~~~~~
+ARROWS = {False: "\u25BC", True: "\u25B2"}
+
 # enum class
 class FieldType(Enum):
     ENTRY = auto()
@@ -601,9 +603,9 @@ class MainMenu(ttk.Frame):
         self.users_handler = UsersHandler(DB_NAME)
 
         self.field_names = self.users_handler.get_field_names()
+        self.sort_directions = {col: None for col in self.field_names}  # None, True (ASC), False (DESC)
 
         self._build_interface()
-        #self.update_frame()
 
         self.controller.bind("<<show_frame>>", self.update_frame, add="+")
         self.controller.bind("<<new_account_created>>", self.load_data, add="+")
@@ -629,7 +631,7 @@ class MainMenu(ttk.Frame):
         )
 
         for field_name in self.field_names:
-            self.tree.heading(field_name, text=field_name, anchor='w')
+            self.tree.heading(field_name, text=field_name, anchor='w', command=lambda c=field_name: self.__handle_sort(c))
             self.tree.column(field_name, width=80, anchor="w") #, stretch=(i == 0 or i == len(self.FIELDS) - 1)
 
         self.tree.pack()
@@ -654,6 +656,31 @@ class MainMenu(ttk.Frame):
             command=self.__on_new_account_clicked
         )
         # ----- --- -- ------- ----- -----
+
+    def __handle_sort(self, col):
+        current = self.sort_directions[col]
+        reverse = not current if current is not None else False
+
+        # Get all data
+        data = [(self.tree.set(iid, col), iid) for iid in self.tree.get_children('')]
+
+        # Try to sort numerically, fallback to string
+        try:
+            data.sort(key=lambda t: float(t[0]), reverse=reverse)
+        except ValueError:
+            data.sort(key=lambda t: t[0], reverse=reverse)
+
+        # Rearranging items in Treeview
+        for index, (val, iid) in enumerate(data):
+            self.tree.move(iid, '', index)
+
+        # Update sort directions
+        for c in self.field_names:
+            self.sort_directions[c] = None  # reset others
+            self.tree.heading(c, text=c.title())  # reset heading
+
+        self.sort_directions[col] = reverse
+        self.tree.heading(col, text=f"{col.title()} {ARROWS[reverse]}")
 
     def __create_modal(self, title: str) -> tk.Toplevel:
         top_level = tk.Toplevel(self.controller)

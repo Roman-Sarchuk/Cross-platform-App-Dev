@@ -7,6 +7,8 @@ import sys
 from pathlib import Path
 from cryptography.fernet import Fernet
 import bcrypt
+import hmac
+import hashlib
 from secrets import SystemRandom
 
 
@@ -156,23 +158,27 @@ class Encryptor(Singleton):
         return self.cipher.decrypt(encrypted_data.encode()).decode()
 
     @staticmethod
-    def hash(value: str) -> str:
+    def hash_with_salt(value: str) -> str:
         salt = bcrypt.gensalt()
         hashed = bcrypt.hashpw(value.encode('utf-8'), salt)
         return hashed.decode()
 
     @staticmethod
-    def verify_hash(value: str, hashed_value: str) -> bool:
+    def verify_salty_hash(value: str, hashed_value: str) -> bool:
         return bcrypt.checkpw(value.encode(), hashed_value.encode())
+
+    def hash(self, text: str) -> str:
+        h = hmac.new(self.fernet_key, text.encode(), hashlib.sha256)
+        return h.hexdigest()
 
     def hash_boolean(self, key: str, boolean: bool) -> str:
         data = f"{key}:true" if boolean else f"{key}:false"
-        return self.hash(data)
+        return self.hash_with_salt(data)
 
     def match_boolean_hash(self, key: str, hashed_boolean: str) -> bool:
-        if self.verify_hash(f"{key}:true", hashed_boolean):
+        if self.verify_salty_hash(f"{key}:true", hashed_boolean):
             return True
-        elif self.verify_hash(f"{key}:false", hashed_boolean):
+        elif self.verify_salty_hash(f"{key}:false", hashed_boolean):
             return False
         return None
 
@@ -266,23 +272,23 @@ class SettingsHandler(Singleton):
             self._initialized = True
 
     def get(self, key: SettingName) -> str:
-        encrypted_key = self.encryptor.encrypt_with_fernet(key.value)
-        rows = self.db_handler.get_rows(TableName.SETTINGS, {"key": encrypted_key})
+        hashed_key = self.encryptor.hash(key.value)
+        rows = self.db_handler.get_rows(TableName.SETTINGS, {"key": hashed_key})
         return rows[0]["value"] if rows else None
 
     def get_value(self, key: SettingName) -> bool:
         hashed_value = self.get(key)
-        return self.encryptor.match_boolean_hash(key.value, hashed_value)
+        return self.encryptor.match_boolean_hash(key.value, hashed_value) if hashed_value else None
 
     def insert(self, key: SettingName, value: bool):
-        encrypted_key = self.encryptor.encrypt_with_fernet(key.value)
-        hashed_value = self.encryptor.hash_boolean(key.value, value)
-        self.db_handler.insert(TableName.SETTINGS, {"key": encrypted_key, "value": hashed_value})
+        hashed_key = self.encryptor.hash(key.value)
+        hashed_boolean = self.encryptor.hash_boolean(key.value, value)
+        self.db_handler.insert(TableName.SETTINGS, {"key": hashed_key, "value": hashed_boolean})
 
-    def update(self, key: SettingName, value: bool):
-        encrypted_key = self.encryptor.encrypt_with_fernet(key.value)
-        hashed_value = self.encryptor.hash_boolean(key.value, value)
-        self.db_handler.update(TableName.SETTINGS, {"value": hashed_value}, {"key": encrypted_key})
+    def update(self, key: SettingName, new_value: bool):
+        hashed_key = self.encryptor.hash(key.value)
+        hashed_boolean = self.encryptor.hash_boolean(key.value, new_value)
+        self.db_handler.update(TableName.SETTINGS, {"value": hashed_boolean}, {"key": hashed_key})
 
 
 class DatabaseInitializer(Singleton):
@@ -367,16 +373,17 @@ class DatabaseInitializer(Singleton):
 
     def check_and_fill_user_roles(self):
         encryptor = Encryptor()
-        bd_handler = DBHandler(self.db_path)
+        db_handler = DBHandler(self.db_path)
+        user_handler = UsersHandler(self.db_path)
+        role_dict = user_handler.get_roles()
 
-        for role in self.DEFAULT_USER_ROLES:
-            encrypted_role = encryptor.encrypt_with_fernet(role)
-            rows = bd_handler.get_rows(TableName.USER_ROLES, {"name": encrypted_role})
-            if not rows:
-                bd_handler.insert(TableName.USER_ROLES, {"name": encrypted_role})
-                self._log_info(f"🎭|🔼 Додано базову роль '{role}' у таблицю 'user_roles'")
+        for role_name in self.DEFAULT_USER_ROLES:
+            if role_name not in role_dict:
+                encrypted_role = encryptor.encrypt_with_fernet(role_name)
+                db_handler.insert(TableName.USER_ROLES, {"name": encrypted_role})
+                self._log_info(f"🎭|🔼 Додано базову роль '{role_name}' у таблицю 'user_roles'")
             else:
-                self._log_info(f"🎭|✅ Базова роль '{role}' міститься у таблицю 'user_roles'")
+                self._log_info(f"🎭|✅ Базова роль '{role_name}' міститься у таблицю 'user_roles'")
 
     def verify_and_init_db(self):
         self.connect_to_db_or_create()
@@ -409,22 +416,23 @@ class DatabaseInitializer(Singleton):
 
 
 class UsersHandler(Singleton):
-    UNENCRYPTED_FIELDS = ["id", "password", "role_id"]
+    UNENCRYPTED_FIELDS = ["id", "password", "role_id", "login", "created_date"]
 
     def __init__(self, db_path: str):
         if not self._initialized:
             self.encryptor = Encryptor()
             self.db_handler = DBHandler(db_path)
+            self.db_name = db_path
             self.authenticated_user = None
 
             self._initialized = True
 
     def add(self, username, login, password, role_id):
-        hashed_password = self.encryptor.hash(password)
+        hashed_password = self.encryptor.hash_with_salt(password)
 
         self.db_handler.insert(TableName.USERS, {
             "username": self.encryptor.encrypt_with_fernet(username),
-            "login": self.encryptor.encrypt_with_fernet(login),
+            "login": login,
             "password": hashed_password,
             "role_id": role_id
         })
@@ -433,14 +441,14 @@ class UsersHandler(Singleton):
         self.db_handler.remove(TableName.USERS, {"id": user_id})
 
     def authenticate(self, login, password) -> AuthenticationResult:
-        user_rows = self.db_handler.get_rows(TableName.USERS, {"login": self.encryptor.encrypt_with_fernet(login)})
+        user_rows = self.db_handler.get_rows(TableName.USERS, {"login": login})
 
         if not user_rows:
             return AuthenticationResult.INCORRECT_LOGIN
 
         user_data = user_rows[0]
 
-        if not self.encryptor.verify_hash(password, user_data["password"]):
+        if not self.encryptor.verify_salty_hash(password, user_data["password"]):
             return AuthenticationResult.INCORRECT_PASSWORD
 
         self.authenticated_user = user_data
@@ -479,7 +487,7 @@ class UsersHandler(Singleton):
         self.authenticated_user = None
 
     def get_authenticated_user_name(self):
-        return self.encryptor.decrypt_with_fernet(self.authenticated_user["username"])
+        return self.encryptor.decrypt_with_fernet(self.authenticated_user["username"]) if self.authenticated_user else None
 
     def get_records(self):
         records = self.db_handler.get_rows(TableName.USERS)
@@ -583,15 +591,17 @@ class MainMenu(ttk.Frame):
         self.field_names = self.users_handler.get_field_names()
 
         self._build_interface()
-        self.bind("<<show_frame>>", self.update_frame)
-        self.bind("<<new_account_created>>", self.load_data)
+        #self.update_frame()
+
+        self.controller.bind("<<show_frame>>", self.update_frame)
+        self.controller.bind("<<new_account_created>>", self.load_data)
 
     def _build_interface(self):
         # ----- Frame initialisation -----
         frame_header = ttk.Frame(self, padding=(5, 5, 5, 10), width=450)
-        frame_header.pack(padx=10, pady=10)
+        frame_header.pack(expand=True, fill=tk.X, padx=10, pady=10)
         frame_tree = ttk.Frame(self, width=450)
-        frame_tree.pack(pady=(10, 0))
+        frame_tree.pack(padx=10, pady=(0,10))
         # ----- ----- -------------- -----
 
         # ----- Set up Treeview -----
@@ -608,7 +618,7 @@ class MainMenu(ttk.Frame):
 
         for field_name in self.field_names:
             self.tree.heading(field_name, text=field_name, anchor='w')
-            self.tree.column(field_name, width=160, anchor="w") #, stretch=(i == 0 or i == len(self.FIELDS) - 1)
+            self.tree.column(field_name, width=80, anchor="w") #, stretch=(i == 0 or i == len(self.FIELDS) - 1)
 
         self.tree.pack()
 
@@ -856,7 +866,7 @@ class NewAccountMenu(ttk.Frame):
         self.is_first_account_mod = False
 
         self.role_dict = self.user_handler.get_roles()   # name, id
-        roles = self.role_dict.keys()
+        roles = tuple(self.role_dict.keys())
 
         self.entry_form_fields_data = [
             {"var_name": "username", "type": FieldType.ENTRY},
@@ -904,9 +914,8 @@ class NewAccountMenu(ttk.Frame):
             role_id = self.role_dict[user_values["role"]]
         )
 
-        self.controller.event_generate("<<new_account_created>>")
-
         if self.controller:
+            self.controller.event_generate("<<new_account_created>>")
             self.controller.go_back_menu()
 
         if self.is_first_account_mod:

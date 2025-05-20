@@ -680,7 +680,11 @@ class MainMenu(ttk.Frame):
 
     def update_frame(self, event=None):
         if self.controller.is_authentication():
-            self.user_label.configure(text=self.users_handler.get_authenticated_user_name())
+            access_role = self.controller.get_access_role()
+            if access_role:
+                self.user_label.configure(text=self.users_handler.get_authenticated_user_name() + f" ({access_role})")
+            else:
+                self.user_label.configure(text=self.users_handler.get_authenticated_user_name())
             self.user_label.pack(side=tk.LEFT)
             if self.controller.get_access_role() == DEFAULT_ADMIN_ROLE:
                 self.logout_button.pack(side=tk.RIGHT)

@@ -593,8 +593,8 @@ class MainMenu(ttk.Frame):
         self._build_interface()
         #self.update_frame()
 
-        self.controller.bind("<<show_frame>>", self.update_frame)
-        self.controller.bind("<<new_account_created>>", self.load_data)
+        self.controller.bind("<<show_frame>>", self.update_frame, add="+")
+        self.controller.bind("<<new_account_created>>", self.load_data, add="+")
 
     def _build_interface(self):
         # ----- Frame initialisation -----
@@ -804,7 +804,11 @@ class DataEntryForm(ttk.Frame):
         return self.vars[var_name].get()
 
     def set_field_value(self, var_name, value):
-        self.vars[var_name].get()
+        self.vars[var_name].set(value)
+
+    def clear_form(self):
+        for var in self.vars.values():
+            var.set("")
 
     def config_control_widget(self, var_name, **kwargs):
         self.control_widgets[var_name].config(**kwargs)
@@ -832,6 +836,8 @@ class LoginMenu(ttk.Frame):
         )
         self.data_entry_form.pack(fill=tk.BOTH, expand=True)
 
+        self.controller.bind("<<show_frame>>", self.update_frame, add="+")
+
     def login(self):
         # varify empty fields
         for var_name in self.var_names:
@@ -854,6 +860,9 @@ class LoginMenu(ttk.Frame):
         access_level = self.user_handler.authorize_authenticated_user()
         self.controller.set_access_role(access_level)
         self.controller.show_frame(MainMenu)
+
+    def update_frame(self, event):
+        self.data_entry_form.clear_form()
 
 
 class NewAccountMenu(ttk.Frame):
@@ -885,6 +894,9 @@ class NewAccountMenu(ttk.Frame):
             self.entry_form_fields_data, self.entry_form_button_parameters
         )
         self.data_entry_form.pack(fill=tk.BOTH, expand=True)
+
+        if self.controller:
+            self.controller.bind("<<show_frame>>", self.update_frame, add="+")
 
     def create_new_account(self):
         user_values = {}
@@ -920,6 +932,9 @@ class NewAccountMenu(ttk.Frame):
 
         if self.is_first_account_mod:
             self.turn_off_first_account_mod()
+
+    def update_frame(self, event):
+        self.data_entry_form.clear_form()
 
     def turn_on_first_account_mod(self):
         self.is_first_account_mod = True

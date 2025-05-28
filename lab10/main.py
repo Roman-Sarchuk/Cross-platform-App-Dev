@@ -980,9 +980,6 @@ class NewAccountMenu(ttk.Frame):
         )
         self.data_entry_form.pack(fill=tk.BOTH, expand=True)
 
-        if self.controller:
-            self.controller.bind("<<show_frame>>", self.update_frame, add="+")
-
     def create_new_account(self):
         user_values = {}
 
@@ -1020,6 +1017,8 @@ class NewAccountMenu(ttk.Frame):
 
         if self.is_first_account_mod:
             self.turn_off_first_account_mod()
+
+        self.data_entry_form.clear_form()
 
     def update_frame(self, event):
         self.data_entry_form.clear_form()

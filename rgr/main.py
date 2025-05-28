@@ -464,6 +464,9 @@ class DatabaseInitializer(Singleton):
 
 
 class Logger(Singleton):
+    UNENCRYPTED_FIELDS = ["id", "date", "description"]
+    FIELDS = ["id", "operation", "username", "role", "date", "description"]
+
     def __init__(self):
         if not self._initialized:
             self.db_handler = DBHandler(DB_NAME)
@@ -500,7 +503,30 @@ class Logger(Singleton):
         })
 
     def get_records(self):
-        pass
+        query = f"""
+        SELECT l.id, o.name as operation, u.username, r.name as role, l.log_date as date, l.description
+        FROM {TableName.LOGS.value} as l 
+        JOIN {TableName.OPERATION_TYPES.value} as o ON l.operation_type_id=o.id
+        JOIN {TableName.USERS.value} as u ON l.user_id=u.id
+        JOIN {TableName.USER_ROLES.value} as r on u.role_id=r.id;
+        """
+
+        with sqlite3.connect(DB_NAME) as conn:
+            conn.row_factory = sqlite3.Row  # This enables column access by name
+            cursor = conn.cursor()
+            cursor.execute(query)
+            rows = cursor.fetchall()
+            records = [dict(row) for row in rows]
+
+        for record in records:
+            for key, value in record.items():
+                if key not in self.UNENCRYPTED_FIELDS and value is not None:
+                    record[key] = self.encryptor.decrypt_with_fernet(value)
+
+        return records
+
+    def get_field_names(self):
+        return self.FIELDS
 
 
 class UsersHandler(Singleton):
@@ -709,6 +735,7 @@ class MainMenu(ttk.Frame):
         self.parent = parent
         self.controller = controller
         self.users_handler = UsersHandler(DB_NAME)
+        self.logger = Logger()
 
         self.field_names = self.users_handler.get_field_names()
         self.sort_directions = {col: None for col in self.field_names}  # None, True (ASC), False (DESC)
@@ -722,9 +749,9 @@ class MainMenu(ttk.Frame):
     def _build_interface(self):
         # ----- Frame initialisation -----
         frame_header = ttk.Frame(self, padding=(5, 5, 5, 10), width=450)
-        frame_header.pack(expand=True, fill=tk.X, padx=10, pady=10)
+        frame_header.pack(anchor="n", fill=tk.X, padx=10, pady=10)
         frame_tree = ttk.Frame(self, width=450)
-        frame_tree.pack(padx=10, pady=(0,10))
+        frame_tree.pack(expand=True, fill=tk.BOTH, padx=10, pady=(0,10))
         # ----- ----- -------------- -----
 
         # ----- Set up Treeview -----
@@ -734,6 +761,7 @@ class MainMenu(ttk.Frame):
         self.tree = ttk.Treeview(
             frame_tree,
             columns=self.field_names,
+            selectmode = "browse",
             show="headings",
             height=10,
             yscrollcommand=scrollbar.set,
@@ -748,7 +776,8 @@ class MainMenu(ttk.Frame):
             self.tree.heading(field_name, text=field_name, anchor='w', command=lambda c=field_name: self.__handle_sort(c))
             self.tree.column(field_name, width=80, anchor="w") #, stretch=(i == 0 or i == len(self.FIELDS) - 1)
 
-        self.tree.pack()
+        self.tree.pack(expand=True, fill=tk.BOTH)
+        self.tree.bind("<<TreeviewSelect>>", self.__on_select)
 
         self.load_data()
 
@@ -768,6 +797,19 @@ class MainMenu(ttk.Frame):
             frame_header,
             text="New Account", width=15,
             command=self.__on_new_account_clicked
+        )
+
+        self.delete_button = ttk.Button(
+            frame_header,
+            text="Delete", width=15,
+            command=self.__on_delete_clicked,
+            state=tk.DISABLED
+        )
+
+        self.view_logs_button = ttk.Button(
+            frame_header,
+            text="View logs", width=15,
+            command=self.__on_view_logs_clicked
         )
         # ----- --- -- ------- ----- -----
 
@@ -790,14 +832,20 @@ class MainMenu(ttk.Frame):
             if self.controller.get_access_role() == DEFAULT_ADMIN_ROLE:
                 self.logout_button.pack(side=tk.RIGHT)
                 self.new_account_button.pack(side=tk.RIGHT)
+                self.delete_button.pack(side=tk.RIGHT)
+                self.view_logs_button.pack(side=tk.RIGHT)
             else:
                 self.logout_button.pack(side=tk.RIGHT)
                 self.new_account_button.pack_forget()
+                self.delete_button.pack_forget()
+                self.view_logs_button.pack_forget()
         else:
             self.user_label.configure(text="ADMIN")
             self.user_label.pack(side=tk.LEFT)
             self.logout_button.pack_forget()
             self.new_account_button.pack(side=tk.RIGHT)
+            self.delete_button.pack(side=tk.RIGHT)
+            self.view_logs_button.pack(side=tk.RIGHT)
 
     # --- button binding ---
     def __create_modal(self, title: str) -> tk.Toplevel:
@@ -825,7 +873,78 @@ class MainMenu(ttk.Frame):
         self.users_handler.logout_authenticated_user()
         self.controller.open_start_menu()
 
+    def __on_delete_clicked(self):
+        selected_item = self.tree.selection()
+        if not selected_item:
+            return
+        selected_item_iid = selected_item[0]
+        self.users_handler.remove(self.tree.set(selected_item_iid)["id"])
+        self.tree.delete(selected_item_iid)
+
+    def __on_view_logs_clicked(self):
+        modal = self.__create_modal("Logs")
+        modal.resizable(width=True, height=True)
+
+        # build interface
+        scrollbar = ttk.Scrollbar(modal, orient="vertical")
+        scrollbar.pack(side="right", fill="y")
+
+        field_names = self.logger.get_field_names()
+
+        tree = ttk.Treeview(
+            modal,
+            columns=field_names,
+            selectmode="browse",
+            show="headings",
+            height=10,
+            yscrollcommand=scrollbar.set,
+        )
+
+        def handle_sort(col):
+            last_char = tree.heading(col, option="text")[-1]
+            reverse = True if last_char == ARROWS[False] else False
+
+            # Get all data
+            data = [(tree.set(iid, col), iid) for iid in tree.get_children('')]
+
+            # Try to sort numerically, fallback to string
+            try:
+                data.sort(key=lambda t: float(t[0]), reverse=reverse)
+            except ValueError:
+                data.sort(key=lambda t: t[0], reverse=reverse)
+
+            # Rearranging items in Treeview
+            for index, (val, iid) in enumerate(data):
+                tree.move(iid, '', index)
+
+            # Update sort directions
+            for c in field_names:
+                tree.heading(c, text=c.title())  # reset heading
+
+            tree.heading(col, text=f"{col.title()} {ARROWS[reverse]}")
+
+        for field_name in field_names:
+            tree.heading(field_name, text=field_name, anchor='w', command=lambda c=field_name: handle_sort(c))
+            tree.column(field_name, width=80, anchor="w")  # , stretch=(i == 0 or i == len(self.FIELDS) - 1)
+
+        tree.pack(expand=True, fill="both")
+        scrollbar.config(command=tree.yview)
+
+        # data getting from DB
+        records = self.logger.get_records()
+
+        # add records in the Treeview
+        for record in records:
+            tree.insert("", "end", values=[record[field] for field in field_names])
+
     # --- treeview binding ---
+    def __on_select(self, event=None):
+        selected = self.tree.selection()
+        if selected:
+            self.delete_button.config(state="normal")
+        else:
+            self.delete_button.config(state="disabled")
+
     def __handle_sort(self, col):
         current = self.sort_directions[col]
         reverse = not current if current is not None else False
@@ -1107,6 +1226,7 @@ class NewAccountMenu(ttk.Frame):
         # verify login available
         if self.db_handler.record_exists(TableName.USERS, {"login": user_values["login"]}):
             messagebox.showwarning("Creating New Account...", "A user with that login already exists. Please choose a different login!")
+            return
 
         # create account
         self.user_handler.add(

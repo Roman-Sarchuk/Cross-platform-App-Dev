@@ -32,10 +32,22 @@ class TableName(Enum):
     USER_ROLES = "user_roles"
     USERS = "users"
     SETTINGS = "settings"
+    OPERATION_TYPES = "operation_types"
+    LOGS = "logs"
+
+
+class OperationType(Enum):
+    LOGIN = "login"
+    NEW_ACCOUNT = "new_account"
+    LOGOUT = "logout"
+    INSERT = "insert"
+    UPDATE = "update"
+    DELETE = "delete"
 
 
 class SettingName(Enum):
     AUTHENTICATION = "authentication"
+    LOGS = "logs"
 
 
 class AuthenticationResult(Enum):
@@ -315,10 +327,29 @@ class DatabaseInitializer(Singleton):
                 key TEXT NOT NULL UNIQUE,
                 value TEXT NOT NULL
             );
+        ''',
+        TableName.OPERATION_TYPES.value: '''
+            CREATE TABLE IF NOT EXISTS operation_types (
+                id INTEGER PRIMARY KEY NOT NULL UNIQUE,
+                name TEXT NOT NULL UNIQUE,
+                hashed_name TEXT NOT NULL UNIQUE
+            );
+        ''',
+        TableName.LOGS.value: '''
+            CREATE TABLE IF NOT EXISTS logs (
+                id INTEGER PRIMARY KEY NOT NULL UNIQUE,
+                operation_type_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                log_date DATETIME DEFAULT CURRENT_TIMESTAMP,
+                description TEXT,
+                FOREIGN KEY(operation_type_id) REFERENCES operation_types(id),
+                FOREIGN KEY(user_id) REFERENCES users(id)
+            );
         '''
     }
     SETTINGS = {
         SettingName.AUTHENTICATION: True,
+        SettingName.LOGS: True
     }
     DEFAULT_USER_ROLES = [DEFAULT_ADMIN_ROLE, DEFAULT_USER_ROLE]
 
@@ -385,11 +416,28 @@ class DatabaseInitializer(Singleton):
             else:
                 self._log_info(f"🎭|✅ Базова роль '{role_name}' міститься у таблицю 'user_roles'")
 
+    def check_and_fill_operation_types(self):
+        encryptor = Encryptor()
+        db_handler = DBHandler(self.db_path)
+        logger = Logger()
+        operation_types = logger.get_operation_types()
+
+        for op in OperationType:
+            if op.value not in operation_types:
+                db_handler.insert(TableName.OPERATION_TYPES, {
+                    "name": encryptor.encrypt_with_fernet(op.value),
+                    "hashed_name": encryptor.hash(op.value)
+                })
+                self._log_info(f"📜|🔼 Додано тип операції '{op.value}' у таблицю 'operation_types'")
+            else:
+                self._log_info(f"📜|✅ Тип операції '{op.value}' міститься у таблицю 'operation_types'")
+
     def verify_and_init_db(self):
         self.connect_to_db_or_create()
         self.check_and_create_tables()
         self.verify_and_fill_settings()
         self.check_and_fill_user_roles()
+        self.check_and_fill_operation_types()
         self.print_logs()
         self.close()
 
@@ -415,6 +463,46 @@ class DatabaseInitializer(Singleton):
                 print(log)
 
 
+class Logger(Singleton):
+    def __init__(self):
+        if not self._initialized:
+            self.db_handler = DBHandler(DB_NAME)
+            self.encryptor = Encryptor()
+            self.user_id = None
+
+            self._initialized = True
+
+    def set_user_id(self, user_id: int):
+        self.user_id = user_id
+
+    def get_operation_types(self) -> list[str]:
+        rows = self.db_handler.get_rows(TableName.OPERATION_TYPES)
+
+        operation_types = []
+        for row in rows:
+            operation_types.append(self.encryptor.decrypt_with_fernet(row["name"]))
+
+        return operation_types
+
+    def add(self, operation_type: OperationType, description:str=""):
+        if not self.user_id:
+            raise ValueError("user_id isn't set")
+
+        operation_type_rows = self.db_handler.get_rows(
+            TableName.OPERATION_TYPES, {"hashed_name": self.encryptor.hash(operation_type.value)}
+        )
+        operation_type_id = operation_type_rows[0]["id"]
+
+        self.db_handler.insert(TableName.LOGS, {
+            "operation_type_id": operation_type_id,
+            "user_id": self.user_id,
+            "description": description
+        })
+
+    def get_records(self):
+        pass
+
+
 class UsersHandler(Singleton):
     UNENCRYPTED_FIELDS = ["id", "password", "role_id", "login", "created_date"]
     FIELDS = ["id", "username", "login", "password", "role", "created_date"]
@@ -423,6 +511,7 @@ class UsersHandler(Singleton):
         if not self._initialized:
             self.encryptor = Encryptor()
             self.db_handler = DBHandler(db_path)
+            self.logger = Logger()
             self.db_name = db_path
             self.authenticated_user = None
 
@@ -438,8 +527,23 @@ class UsersHandler(Singleton):
             "role_id": role_id
         })
 
+        try:
+            self.logger.add(OperationType.NEW_ACCOUNT)
+        except ValueError:
+            rows = self.db_handler.get_rows(TableName.USERS, {"login": login})
+            user_id = rows[0]["id"]
+            self.logger.set_user_id(user_id)
+            self.logger.add(OperationType.NEW_ACCOUNT, description="initial account")
+
     def remove(self, user_id):
+        row = self.db_handler.get_rows(TableName.USERS, {"id": user_id})[0]
+        for k, v in row.items():
+            if k not in self.UNENCRYPTED_FIELDS:
+                row[k] = self.encryptor.decrypt_with_fernet(v)
+
         self.db_handler.remove(TableName.USERS, {"id": user_id})
+
+        self.logger.add(OperationType.DELETE, description=str(row))
 
     def authenticate(self, login, password) -> AuthenticationResult:
         user_rows = self.db_handler.get_rows(TableName.USERS, {"login": login})
@@ -453,6 +557,8 @@ class UsersHandler(Singleton):
             return AuthenticationResult.INCORRECT_PASSWORD
 
         self.authenticated_user = user_data
+        self.logger.set_user_id(user_data["id"])
+        self.logger.add(OperationType.LOGIN,)
         return AuthenticationResult.SUCCESS
 
     def authorize_authenticated_user(self) -> str:
@@ -486,7 +592,9 @@ class UsersHandler(Singleton):
         return {role["name"]: role["id"] for role in role_rows}
 
     def logout_authenticated_user(self):
+        self.logger.add(OperationType.LOGOUT)
         self.authenticated_user = None
+        self.logger.set_user_id(None)
 
     def get_authenticated_user_name(self):
         return self.encryptor.decrypt_with_fernet(self.authenticated_user["username"]) if self.authenticated_user else ""

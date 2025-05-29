@@ -648,13 +648,126 @@ class UsersHandler(Singleton):
 # ~~~~~~~~~~~~~~~ ~~~~~~~ ~~~~~~~~~~~~~~~
 
 # ~~~~~~~~~~~~~~~ FRONTEND ~~~~~~~~~~~~~~~
-ARROWS = {False: "\u25BC", True: "\u25B2"}
 
 # enum class
 class FieldType(Enum):
     ENTRY = auto()
     COMBOBOX = auto()
     SECURITY_ENTRY = auto()
+
+# custom widgets
+class CustomTreeview(ttk.Frame):
+    ARROWS = {False: "\u25BC", True: "\u25B2"}
+
+    def __init__(self, master, columns, **kwargs):
+        super().__init__(master, **kwargs)
+
+        self.columns = columns
+        self.sort_directions = {col: None for col in self.columns}  # None, True (ASC), False (DESC)
+        self.dragged_item = None
+
+        # --- build interface ---
+        scrollbar = ttk.Scrollbar(self, orient="vertical")
+        scrollbar.pack(side="right", fill="y")
+
+        self.tree = ttk.Treeview(
+            self,
+            columns=self.columns,
+            selectmode="browse",
+            show="headings",
+            height=10,
+            yscrollcommand=scrollbar.set,
+        )
+        self.tree.bind("<ButtonPress-1>", self.__on_press)
+        self.tree.bind("<B1-Motion>", self.__on_drag)
+        self.tree.bind("<ButtonRelease-1>", self.__on_release)
+        self.tree.bind("<KeyPress-Page_Down>", lambda event: self.__on_move_up(True))
+        self.tree.bind("<KeyPress-Page_Up>", lambda event: self.__on_move_up(False))
+
+        for col in self.columns:
+            self.tree.heading(col, text=col, anchor='w', command=lambda c=col: self.__handle_sort(c))
+            self.tree.column(col, width=80, anchor="w")  # , stretch=(i == 0 or i == len(self.columns) - 1)
+
+        self.tree.pack(expand=True, fill=tk.BOTH)
+
+        scrollbar.config(command=self.tree.yview)
+
+    def load_data(self, data: list[dict]):
+        # clear table
+        for row in self.tree.get_children():
+            self.tree.delete(row)
+
+        # add records in the Treeview
+        for record in data:
+            self.tree.insert("", "end", values=[record[field] for field in self.columns])
+
+    def set_new_columns(self, columns):
+        self.columns = columns
+
+        self.tree.config(columns=self.columns)
+
+        for col in self.columns:
+            self.tree.heading(col, text=col, anchor='w', command=lambda c=col: self.__handle_sort(c))
+            self.tree.column(col, width=80, anchor="w")  # , stretch=(i == 0 or i == len(self.columns) - 1)
+
+    # --- binding ---
+    def __handle_sort(self, col):
+        current = self.sort_directions[col]
+        reverse = not current if current is not None else False
+
+        # Get all data
+        data = [(self.tree.set(iid, col), iid) for iid in self.tree.get_children('')]
+
+        # Try to sort numerically, fallback to string
+        try:
+            data.sort(key=lambda t: float(t[0]), reverse=reverse)
+        except ValueError:
+            data.sort(key=lambda t: t[0], reverse=reverse)
+
+        # Rearranging items in Treeview
+        for index, (val, iid) in enumerate(data):
+            self.tree.move(iid, '', index)
+
+        # Update sort directions
+        for c in self.columns:
+            self.sort_directions[c] = None  # reset others
+            self.tree.heading(c, text=c)  # reset heading
+
+        self.sort_directions[col] = reverse
+        self.tree.heading(col, text=f"{col} {self.ARROWS[reverse]}")
+
+    def __on_press(self, event):
+        dragged = self.tree.identify_row(event.y)
+        if not dragged:
+            return
+
+        self.dragged_item = dragged
+        self.tree.selection_set(self.dragged_item)
+
+    def __on_drag(self, event):
+        if not self.dragged_item:
+            return
+
+        target = self.tree.identify_row(event.y)
+        if not target or target == self.dragged_item:
+            return
+
+        index = self.tree.index(target)
+        self.tree.move(self.dragged_item, "", index)
+
+    def __on_release(self, event=None):
+        self.dragged_item = None
+
+    def __on_move_up(self, is_down):
+        selected = self.tree.selection()
+        if not selected:
+            return
+
+        selected_item = selected[0]
+        index = self.tree.index(selected_item)
+        new_index = index + (1 if is_down else -1)
+        self.tree.move(selected_item, "", new_index)
+        self.tree.selection_set(selected_item)
 
 
 # main class
@@ -738,8 +851,6 @@ class MainMenu(ttk.Frame):
         self.logger = Logger()
 
         self.field_names = self.users_handler.get_field_names()
-        self.sort_directions = {col: None for col in self.field_names}  # None, True (ASC), False (DESC)
-        self.dragged_item = None
 
         self._build_interface()
 
@@ -747,44 +858,10 @@ class MainMenu(ttk.Frame):
         self.controller.bind("<<new_account_created>>", self.load_data, add="+")
 
     def _build_interface(self):
-        # ----- Frame initialisation -----
+        # ----- Set up Header frame -----
         frame_header = ttk.Frame(self, padding=(5, 5, 5, 10), width=450)
         frame_header.pack(anchor="n", fill=tk.X, padx=10, pady=10)
-        frame_tree = ttk.Frame(self, width=450)
-        frame_tree.pack(expand=True, fill=tk.BOTH, padx=10, pady=(0,10))
-        # ----- ----- -------------- -----
 
-        # ----- Set up Treeview -----
-        scrollbar = ttk.Scrollbar(frame_tree, orient="vertical")
-        scrollbar.pack(side="right", fill="y")
-
-        self.tree = ttk.Treeview(
-            frame_tree,
-            columns=self.field_names,
-            selectmode = "browse",
-            show="headings",
-            height=10,
-            yscrollcommand=scrollbar.set,
-        )
-        self.tree.bind("<ButtonPress-1>", self.__on_press)
-        self.tree.bind("<B1-Motion>", self.__on_drag)
-        self.tree.bind("<ButtonRelease-1>", self.__on_release)
-        self.tree.bind("<KeyPress-Page_Down>", lambda event: self.__on_move_up(True))
-        self.tree.bind("<KeyPress-Page_Up>", lambda event: self.__on_move_up(False))
-
-        for field_name in self.field_names:
-            self.tree.heading(field_name, text=field_name, anchor='w', command=lambda c=field_name: self.__handle_sort(c))
-            self.tree.column(field_name, width=80, anchor="w") #, stretch=(i == 0 or i == len(self.FIELDS) - 1)
-
-        self.tree.pack(expand=True, fill=tk.BOTH)
-        self.tree.bind("<<TreeviewSelect>>", self.__on_select)
-
-        self.load_data()
-
-        scrollbar.config(command=self.tree.yview)
-        # ----- --- -- -------- -----
-
-        # ----- Set up Header frame -----
         self.user_label = ttk.Label(frame_header, text="USER-NAME")
 
         self.logout_button = ttk.Button(
@@ -792,62 +869,48 @@ class MainMenu(ttk.Frame):
             text="Log Out", width=15,
             command=self.__on_logout_clicked
         )
-
-        self.new_account_button = ttk.Button(
-            frame_header,
-            text="New Account", width=15,
-            command=self.__on_new_account_clicked
-        )
-
-        self.delete_button = ttk.Button(
-            frame_header,
-            text="Delete", width=15,
-            command=self.__on_delete_clicked,
-            state=tk.DISABLED
-        )
-
-        self.view_logs_button = ttk.Button(
-            frame_header,
-            text="View logs", width=15,
-            command=self.__on_view_logs_clicked
-        )
         # ----- --- -- ------- ----- -----
 
-    def load_data(self, event=None):
-        # clear table
-        for row in self.tree.get_children():
-            self.tree.delete(row)
+        # ----- Set up Body frame -----
+        frame_body = ttk.Frame(self, width=450)
+        frame_body.pack(expand=True, fill=tk.BOTH, padx=10)
 
+        self.tree = CustomTreeview(frame_body, self.field_names)
+        self.tree.pack(expand=True, fill=tk.BOTH, padx=10, pady=10)
+
+        self.load_data()
+        # ----- --- -- ---- ----- -----
+
+        # ----- Set up Footer frame -----
+        frame_footer = ttk.Frame(self, width=450)
+        frame_footer.pack(anchor="s", fill=tk.X, padx=10, pady=10)
+
+        button_new_record = ttk.Button(frame_footer, text="Add New", command=self.__on_add_new_clicked, width=15)
+        button_new_record.pack(side=tk.LEFT)
+        button_del_record = ttk.Button(frame_footer, text="Delete", command=self.__on_delete_clicked, width=15)
+        button_del_record.pack(side=tk.LEFT)
+        # ----- --- -- ------ ----- -----
+
+    def load_data(self, event=None):
         # data getting from DB
         records = self.users_handler.get_records()
 
-        # add records in the Treeview
-        for record in records:
-            self.tree.insert("", "end", values=[record[field] for field in self.field_names])
+        self.tree.load_data(records)
 
     def update_frame(self, event=None):
         if self.controller.is_authentication():
             self.user_label.configure(text=self.users_handler.get_authenticated_user_name() + f" ({self.controller.get_access_role()})")
             self.user_label.pack(side=tk.LEFT)
+            self.logout_button.pack(side=tk.RIGHT)
             if self.controller.get_access_role() == DEFAULT_ADMIN_ROLE:
-                self.logout_button.pack(side=tk.RIGHT)
-                self.new_account_button.pack(side=tk.RIGHT)
-                self.delete_button.pack(side=tk.RIGHT)
-                self.view_logs_button.pack(side=tk.RIGHT)
+                pass
             else:
-                self.logout_button.pack(side=tk.RIGHT)
-                self.new_account_button.pack_forget()
-                self.delete_button.pack_forget()
-                self.view_logs_button.pack_forget()
+                pass
         else:
             self.user_label.configure(text="ADMIN")
             self.user_label.pack(side=tk.LEFT)
             self.logout_button.pack_forget()
-            self.new_account_button.pack(side=tk.RIGHT)
-            self.delete_button.pack(side=tk.RIGHT)
-            self.view_logs_button.pack(side=tk.RIGHT)
 
-    # --- button binding ---
     def __create_modal(self, title: str) -> tk.Toplevel:
         top_level = tk.Toplevel(self.controller)
 
@@ -859,19 +922,12 @@ class MainMenu(ttk.Frame):
 
         return top_level
 
-    def __on_new_account_clicked(self):
+    # --- button binding ---
+    def __on_add_new_clicked(self):
         modal = self.__create_modal("Add Record")
 
         frame = NewAccountMenu(parent=modal, controller=None, comm=lambda: self.__on_modal_new_account_created(modal))
         frame.grid(row=0, column=0, sticky="nsew")
-
-    def __on_modal_new_account_created(self, modal):
-        modal.destroy()
-        self.load_data()
-
-    def __on_logout_clicked(self):
-        self.users_handler.logout_authenticated_user()
-        self.controller.open_start_menu()
 
     def __on_delete_clicked(self):
         selected_item = self.tree.selection()
@@ -881,127 +937,26 @@ class MainMenu(ttk.Frame):
         self.users_handler.remove(self.tree.set(selected_item_iid)["id"])
         self.tree.delete(selected_item_iid)
 
+    # def __on_modal_new_account_created(self, modal):
+    #     modal.destroy()
+    #     self.load_data()
+
+    def __on_logout_clicked(self):
+        self.users_handler.logout_authenticated_user()
+        self.controller.open_start_menu()
+
     def __on_view_logs_clicked(self):
+        # data getting from DB
+        field_names = self.logger.get_field_names()
+        records = self.logger.get_records()
+
+        # build interface
         modal = self.__create_modal("Logs")
         modal.resizable(width=True, height=True)
 
-        # build interface
-        scrollbar = ttk.Scrollbar(modal, orient="vertical")
-        scrollbar.pack(side="right", fill="y")
-
-        field_names = self.logger.get_field_names()
-
-        tree = ttk.Treeview(
-            modal,
-            columns=field_names,
-            selectmode="browse",
-            show="headings",
-            height=10,
-            yscrollcommand=scrollbar.set,
-        )
-
-        def handle_sort(col):
-            last_char = tree.heading(col, option="text")[-1]
-            reverse = True if last_char == ARROWS[False] else False
-
-            # Get all data
-            data = [(tree.set(iid, col), iid) for iid in tree.get_children('')]
-
-            # Try to sort numerically, fallback to string
-            try:
-                data.sort(key=lambda t: float(t[0]), reverse=reverse)
-            except ValueError:
-                data.sort(key=lambda t: t[0], reverse=reverse)
-
-            # Rearranging items in Treeview
-            for index, (val, iid) in enumerate(data):
-                tree.move(iid, '', index)
-
-            # Update sort directions
-            for c in field_names:
-                tree.heading(c, text=c.title())  # reset heading
-
-            tree.heading(col, text=f"{col.title()} {ARROWS[reverse]}")
-
-        for field_name in field_names:
-            tree.heading(field_name, text=field_name, anchor='w', command=lambda c=field_name: handle_sort(c))
-            tree.column(field_name, width=80, anchor="w")  # , stretch=(i == 0 or i == len(self.FIELDS) - 1)
-
-        tree.pack(expand=True, fill="both")
-        scrollbar.config(command=tree.yview)
-
-        # data getting from DB
-        records = self.logger.get_records()
-
-        # add records in the Treeview
-        for record in records:
-            tree.insert("", "end", values=[record[field] for field in field_names])
-
-    # --- treeview binding ---
-    def __on_select(self, event=None):
-        selected = self.tree.selection()
-        if selected:
-            self.delete_button.config(state="normal")
-        else:
-            self.delete_button.config(state="disabled")
-
-    def __handle_sort(self, col):
-        current = self.sort_directions[col]
-        reverse = not current if current is not None else False
-
-        # Get all data
-        data = [(self.tree.set(iid, col), iid) for iid in self.tree.get_children('')]
-
-        # Try to sort numerically, fallback to string
-        try:
-            data.sort(key=lambda t: float(t[0]), reverse=reverse)
-        except ValueError:
-            data.sort(key=lambda t: t[0], reverse=reverse)
-
-        # Rearranging items in Treeview
-        for index, (val, iid) in enumerate(data):
-            self.tree.move(iid, '', index)
-
-        # Update sort directions
-        for c in self.field_names:
-            self.sort_directions[c] = None  # reset others
-            self.tree.heading(c, text=c.title())  # reset heading
-
-        self.sort_directions[col] = reverse
-        self.tree.heading(col, text=f"{col.title()} {ARROWS[reverse]}")
-
-    def __on_press(self, event):
-        dragged = self.tree.identify_row(event.y)
-        if not dragged:
-            return
-
-        self.dragged_item = dragged
-        self.tree.selection_set(self.dragged_item)
-
-    def __on_drag(self, event):
-        if not self.dragged_item:
-            return
-
-        target = self.tree.identify_row(event.y)
-        if not target or target == self.dragged_item:
-            return
-
-        index = self.tree.index(target)
-        self.tree.move(self.dragged_item, "", index)
-
-    def __on_release(self, event=None):
-        self.dragged_item = None
-
-    def __on_move_up(self, is_down):
-        selected = self.tree.selection()
-        if not selected:
-            return
-
-        selected_item = selected[0]
-        index = self.tree.index(selected_item)
-        new_index = index + (1 if is_down else -1)
-        self.tree.move(selected_item, "", new_index)
-        self.tree.selection_set(selected_item)
+        tree = CustomTreeview(modal, field_names)
+        tree.load_data(records)
+        tree.pack(expand=True, fill=tk.BOTH, padx=10, pady=10)
 
 
 class DataEntryForm(ttk.Frame):

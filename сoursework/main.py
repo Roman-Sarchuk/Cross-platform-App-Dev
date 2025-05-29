@@ -850,7 +850,7 @@ class MainMenu(ttk.Frame):
         super().__init__(parent, *args, **kwargs)
         self.parent = parent
         self.controller = controller
-        self.users_handler = UsersHandler(DB_NAME)
+        self.users_handler = UsersHandler()
         self.logger = Logger()
 
         self.field_names = self.users_handler.get_field_names()
@@ -1092,7 +1092,7 @@ class LoginMenu(ttk.Frame):
         super().__init__(parent, *args, **kwargs)
         self.controller = controller
         self.parent = parent
-        self.user_handler = UsersHandler(DB_NAME)
+        self.user_handler = UsersHandler()
 
         self.entry_form_fields_data = [
             {"var_name": "login", "type": FieldType.ENTRY},
@@ -1144,8 +1144,8 @@ class NewAccountMenu(ttk.Frame):
         self.controller = controller
         self.parent = parent
         self.comm_on_new_account = comm
-        self.db_handler = DBHandler(DB_NAME)
-        self.user_handler = UsersHandler(DB_NAME)
+        self.db_handler = DBHandler()
+        self.user_handler = UsersHandler()
         self.is_first_account_mod = False
 
         self.role_dict = self.user_handler.get_roles()   # name, id

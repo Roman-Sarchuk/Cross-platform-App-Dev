@@ -29,6 +29,7 @@ DEFAULT_USER_ROLE = "user"
 
 # --- enum classes ---
 class TableName(Enum):
+    DEFAULT = "workspace"
     USER_ROLES = "user_roles"
     USERS = "users"
     SETTINGS = "settings"
@@ -197,12 +198,6 @@ class Encryptor(Singleton):
 
 # --- db handlers ---
 class DBHandler(Singleton):
-    def __init__(self, db_name: str):
-        if not self._initialized:
-            self.db_name = db_name
-
-            self._initialized = True
-
     @staticmethod
     def __extract_conditions_params(data: dict) -> tuple[list, list]:
         conditions = []
@@ -218,7 +213,7 @@ class DBHandler(Singleton):
         query = f"SELECT * FROM {table.value}"
 
         # Execute query and return results
-        with sqlite3.connect(self.db_name) as conn:
+        with sqlite3.connect(DB_NAME) as conn:
             conn.row_factory = sqlite3.Row  # This enables column access by name
             cursor = conn.cursor()
             if where:
@@ -233,11 +228,12 @@ class DBHandler(Singleton):
             result = [dict(row) for row in rows]
             return result
 
-    def insert(self, table: TableName, row: dict):
+    @staticmethod
+    def insert(table: TableName, row: dict):
         query = f"INSERT INTO {table.value} ({", ".join(row.keys())}) VALUES ({", ".join("?" * len(row.values()))})"
 
         # Execute query
-        with sqlite3.connect(self.db_name) as conn:
+        with sqlite3.connect(DB_NAME) as conn:
             cursor = conn.cursor()
             cursor.execute(query, tuple(row.values()))
 
@@ -247,7 +243,7 @@ class DBHandler(Singleton):
         query = f"DELETE FROM {table.value} WHERE {" AND ".join(conditions)}"
 
         # Execute query
-        with sqlite3.connect(self.db_name) as conn:
+        with sqlite3.connect(DB_NAME) as conn:
             cursor = conn.cursor()
             cursor.execute(query, params)
 
@@ -259,14 +255,15 @@ class DBHandler(Singleton):
         query = f"UPDATE {table.value} SET {", ".join(set_conditions)} WHERE {" AND ".join(where_conditions)}"
 
         # Execute query
-        with sqlite3.connect(self.db_name) as conn:
+        with sqlite3.connect(DB_NAME) as conn:
             cursor = conn.cursor()
             cursor.execute(query, set_params + where_params)
 
-    def get_row_count(self, table: TableName):
+    @staticmethod
+    def get_row_count(table: TableName):
         query = f"SELECT COUNT(*) FROM {table.value}"
 
-        with sqlite3.connect(self.db_name) as conn:
+        with sqlite3.connect(DB_NAME) as conn:
             cursor = conn.cursor()
             cursor.execute(query)
             return cursor.fetchone()[0]
@@ -276,10 +273,10 @@ class DBHandler(Singleton):
 
 
 class SettingsHandler(Singleton):
-    def __init__(self, db_path: str):
+    def __init__(self):
         if not self._initialized:
             self.encryptor = Encryptor()
-            self.db_handler = DBHandler(db_path)
+            self.db_handler = DBHandler()
 
             self._initialized = True
 
@@ -305,15 +302,20 @@ class SettingsHandler(Singleton):
 
 class DatabaseInitializer(Singleton):
     REQUIRED_TABLES = {
-        TableName.USER_ROLES.value: '''
-            CREATE TABLE IF NOT EXISTS user_roles (
-                id INTEGER PRIMARY KEY NOT NULL UNIQUE,
+        TableName.DEFAULT.value: f'''
+            CREATE TABLE IF NOT EXISTS {TableName.DEFAULT.value} (
+                id INTEGER PRIMARY KEY
+            );
+        ''',
+        TableName.USER_ROLES.value: f'''
+            CREATE TABLE IF NOT EXISTS {TableName.USER_ROLES.value} (
+                id INTEGER PRIMARY KEY,
                 name TEXT NOT NULL UNIQUE
             );
         ''',
-        TableName.USERS.value: '''
-            CREATE TABLE IF NOT EXISTS users (
-                id INTEGER PRIMARY KEY NOT NULL UNIQUE,
+        TableName.USERS.value: f'''
+            CREATE TABLE IF NOT EXISTS {TableName.USERS.value} (
+                id INTEGER PRIMARY KEY,
                 username TEXT NOT NULL,
                 login TEXT NOT NULL UNIQUE,
                 password TEXT NOT NULL,
@@ -322,22 +324,22 @@ class DatabaseInitializer(Singleton):
                 FOREIGN KEY(role_id) REFERENCES user_roles(id)
             );
         ''',
-        TableName.SETTINGS.value: '''
-            CREATE TABLE IF NOT EXISTS settings (
-                key TEXT NOT NULL UNIQUE,
+        TableName.SETTINGS.value: f'''
+            CREATE TABLE IF NOT EXISTS {TableName.SETTINGS.value} (
+                key TEXT PRIMARY KEY,
                 value TEXT NOT NULL
             );
         ''',
-        TableName.OPERATION_TYPES.value: '''
-            CREATE TABLE IF NOT EXISTS operation_types (
-                id INTEGER PRIMARY KEY NOT NULL UNIQUE,
+        TableName.OPERATION_TYPES.value: f'''
+            CREATE TABLE IF NOT EXISTS {TableName.OPERATION_TYPES.value} (
+                id INTEGER PRIMARY KEY,
                 name TEXT NOT NULL UNIQUE,
                 hashed_name TEXT NOT NULL UNIQUE
             );
         ''',
-        TableName.LOGS.value: '''
-            CREATE TABLE IF NOT EXISTS logs (
-                id INTEGER PRIMARY KEY NOT NULL UNIQUE,
+        TableName.LOGS.value: f'''
+            CREATE TABLE IF NOT EXISTS {TableName.LOGS.value} (
+                id INTEGER PRIMARY KEY,
                 operation_type_id INTEGER NOT NULL,
                 user_id INTEGER NOT NULL,
                 log_date DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -353,26 +355,32 @@ class DatabaseInitializer(Singleton):
     }
     DEFAULT_USER_ROLES = [DEFAULT_ADMIN_ROLE, DEFAULT_USER_ROLE]
 
-    def __init__(self, db_path: str, is_info_logging=False):
+    def __init__(self, is_info_logging=False):
         if not self._initialized:
             self.is_info_logging = is_info_logging
             self.logs = []
 
-            self.db_path = db_path
+            self.encryptor = Encryptor()
+            # db handlers
+            self.db_handler = DBHandler()
+            self.settings_handler = SettingsHandler()
+            self.users_handler = UsersHandler()
+            self.logger = Logger()
+
             self.connection = None
             self.cursor = None
 
             self._initialized = True
 
     def connect_to_db_or_create(self):
-        db_exists = os.path.exists(self.db_path)
-        self.connection = sqlite3.connect(self.db_path)
+        db_exists = os.path.exists(DB_NAME)
+        self.connection = sqlite3.connect(DB_NAME)
         self.cursor = self.connection.cursor()
 
         if not db_exists:
-            self._log_info(f"🔗|📁 Створено файл БД: {self.db_path}")
+            self._log_info(f"🔗|📁 Створено файл БД: {DB_NAME}")
         else:
-            self._log_info(f"🔗|✅ Підключено до наявної БД: {self.db_path}")
+            self._log_info(f"🔗|✅ Підключено до наявної БД: {DB_NAME}")
 
     def check_and_create_tables(self):
         if not self.connection and not self.cursor:
@@ -387,46 +395,37 @@ class DatabaseInitializer(Singleton):
                 self._log_info(f"📄|✅ Таблиця вже існує: {table_name}")
 
     def verify_and_fill_settings(self):
-        encryptor = Encryptor()
-        settings_handler = SettingsHandler(self.db_path)
-
         for key, value in self.SETTINGS.items():
-            hashed_setting_value = settings_handler.get(key)
+            hashed_setting_value = self.settings_handler.get(key)
 
             if hashed_setting_value is None:
-                settings_handler.insert(key, value)
+                self.settings_handler.insert(key, value)
                 self._log_info(f"🔧|🔼 Додано параметер '{key.value}' у таблицю 'settings' із значенням за замовчуванням")
-            elif encryptor.match_boolean_hash(key.value, hashed_setting_value) is None:
-                settings_handler.update(key, value)
+            elif self.encryptor.match_boolean_hash(key.value, hashed_setting_value) is None:
+                self.settings_handler.update(key, value)
                 self._log_info(f"🔧|[❗] '{key.value}' пошкоджений у таблиці 'settings'; встановлено значення за замовчування")
             else:
                 self._log_info(f"🔧|✅ '{key.value}' є валіде у таблицю 'settings'")
 
     def check_and_fill_user_roles(self):
-        encryptor = Encryptor()
-        db_handler = DBHandler(self.db_path)
-        user_handler = UsersHandler(self.db_path)
-        role_dict = user_handler.get_roles()
+        role_dict = self.users_handler.get_roles()
 
         for role_name in self.DEFAULT_USER_ROLES:
             if role_name not in role_dict:
-                encrypted_role = encryptor.encrypt_with_fernet(role_name)
-                db_handler.insert(TableName.USER_ROLES, {"name": encrypted_role})
+                encrypted_role = self.encryptor.encrypt_with_fernet(role_name)
+                self.db_handler.insert(TableName.USER_ROLES, {"name": encrypted_role})
                 self._log_info(f"🎭|🔼 Додано базову роль '{role_name}' у таблицю 'user_roles'")
             else:
                 self._log_info(f"🎭|✅ Базова роль '{role_name}' міститься у таблицю 'user_roles'")
 
     def check_and_fill_operation_types(self):
-        encryptor = Encryptor()
-        db_handler = DBHandler(self.db_path)
-        logger = Logger()
-        operation_types = logger.get_operation_types()
+        operation_types = self.logger.get_operation_types()
 
         for op in OperationType:
             if op.value not in operation_types:
-                db_handler.insert(TableName.OPERATION_TYPES, {
-                    "name": encryptor.encrypt_with_fernet(op.value),
-                    "hashed_name": encryptor.hash(op.value)
+                self.db_handler.insert(TableName.OPERATION_TYPES, {
+                    "name": self.encryptor.encrypt_with_fernet(op.value),
+                    "hashed_name": self.encryptor.hash(op.value)
                 })
                 self._log_info(f"📜|🔼 Додано тип операції '{op.value}' у таблицю 'operation_types'")
             else:
@@ -469,7 +468,7 @@ class Logger(Singleton):
 
     def __init__(self):
         if not self._initialized:
-            self.db_handler = DBHandler(DB_NAME)
+            self.db_handler = DBHandler()
             self.encryptor = Encryptor()
             self.user_id = None
 
@@ -533,12 +532,11 @@ class UsersHandler(Singleton):
     UNENCRYPTED_FIELDS = ["id", "password", "role_id", "login", "created_date"]
     FIELDS = ["id", "username", "login", "password", "role", "created_date"]
 
-    def __init__(self, db_path: str):
+    def __init__(self):
         if not self._initialized:
             self.encryptor = Encryptor()
-            self.db_handler = DBHandler(db_path)
+            self.db_handler = DBHandler()
             self.logger = Logger()
-            self.db_name = db_path
             self.authenticated_user = None
 
             self._initialized = True
@@ -631,7 +629,7 @@ class UsersHandler(Singleton):
         JOIN {TableName.USER_ROLES.value} as r ON u.role_id=r.id;
         """
 
-        with sqlite3.connect(self.db_name) as conn:
+        with sqlite3.connect(DB_NAME) as conn:
             conn.row_factory = sqlite3.Row  # This enables column access by name
             cursor = conn.cursor()
             cursor.execute(query)
@@ -644,6 +642,11 @@ class UsersHandler(Singleton):
                     record[key] = self.encryptor.decrypt_with_fernet(value)
 
         return records
+
+
+class DefaultTableHandler(Singleton):
+    def __init__(self):
+        pass
 
 # ~~~~~~~~~~~~~~~ ~~~~~~~ ~~~~~~~~~~~~~~~
 
@@ -887,8 +890,12 @@ class MainMenu(ttk.Frame):
 
         button_new_record = ttk.Button(frame_footer, text="Add New", command=self.__on_add_new_clicked, width=15)
         button_new_record.pack(side=tk.LEFT)
+
         button_del_record = ttk.Button(frame_footer, text="Delete", command=self.__on_delete_clicked, width=15)
         button_del_record.pack(side=tk.LEFT)
+
+        button_table_setting = ttk.Button(frame_footer, text="Setup Table", command=None, width=15)
+        button_table_setting.pack(side=tk.RIGHT)
         # ----- --- -- ------ ----- -----
 
     def load_data(self, event=None):

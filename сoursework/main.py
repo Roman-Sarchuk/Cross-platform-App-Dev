@@ -10,6 +10,7 @@ import bcrypt
 import hmac
 import hashlib
 from secrets import SystemRandom
+from re import fullmatch
 
 
 class Singleton:
@@ -597,14 +598,6 @@ class UsersHandler(Singleton):
         return DEFAULT_USER_ROLE
 
     def get_field_names(self):
-        # with sqlite3.connect(self.db_name) as conn:
-        #     cursor = conn.cursor()
-        #     query = f"PRAGMA table_info({TableName.USERS.value});"
-        #
-        #     cursor.execute(query)
-        #     columns_info = cursor.fetchall()    # cid | name | type | notnull | dflt_value | pk
-        #     column_names = [col[1] for col in columns_info]
-        #     return column_names
         return self.FIELDS
 
     def get_roles(self) -> dict[str, int]:
@@ -646,7 +639,60 @@ class UsersHandler(Singleton):
 
 class DefaultTableHandler(Singleton):
     def __init__(self):
-        pass
+        if not self._initialized:
+            self.db_handler = DBHandler()
+
+            self._initialized = True
+
+    def add_record(self, row: dict):
+        self.db_handler.insert(TableName.DEFAULT, row)
+
+    def delete_record(self, row: dict):
+        rows = self.db_handler.get_rows(TableName.DEFAULT, row)
+        row_id = rows[0]["id"]
+
+        self.db_handler.remove(TableName.DEFAULT, {"id": row_id})
+
+    def edit_record(self, old_record: dict, new_row: dict):
+        rows = self.db_handler.get_rows(TableName.DEFAULT, old_record)
+        row_id = rows[0]["id"]
+
+        self.db_handler.update(TableName.DEFAULT, new_row, {"id": row_id})
+
+    def add_column(self, name: str):
+        with sqlite3.connect(DB_NAME) as conn:
+            cursor = conn.cursor()
+            cursor.execute(f'ALTER TABLE {TableName.DEFAULT.value} ADD COLUMN {name} TEXT DEFAULT "";')
+
+    @staticmethod
+    def delete_column(name: str):
+        with sqlite3.connect(DB_NAME) as conn:
+            cursor = conn.cursor()
+            cursor.execute(f"ALTER TABLE {TableName.DEFAULT.value} DROP COLUMN {name};")
+
+    @staticmethod
+    def rename_column(old_name: str, new_name: str):
+        with sqlite3.connect(DB_NAME) as conn:
+            cursor = conn.cursor()
+            cursor.execute(f"ALTER TABLE {TableName.DEFAULT.value} RENAME COLUMN {old_name} TO {new_name};")
+
+    @staticmethod
+    def get_field_names():
+        with sqlite3.connect(DB_NAME) as conn:
+            cursor = conn.cursor()
+            query = f"PRAGMA table_info({TableName.DEFAULT.value});"
+
+            cursor.execute(query)
+            columns_info = cursor.fetchall()    # cid | name | type | notnull | dflt_value | pk
+            column_names = [col[1] for col in columns_info]
+            column_names.remove("id")
+            return column_names
+
+    def get_records(self):
+        rows = self.db_handler.get_rows(TableName.DEFAULT)
+        for row in rows:
+            row.pop("id")
+        return rows
 
 # ~~~~~~~~~~~~~~~ ~~~~~~~ ~~~~~~~~~~~~~~~
 
@@ -658,131 +704,17 @@ class FieldType(Enum):
     COMBOBOX = auto()
     SECURITY_ENTRY = auto()
 
-# custom widgets
-class CustomTreeview(ttk.Frame):
-    ARROWS = {False: "\u25BC", True: "\u25B2"}
-
-    def __init__(self, master, columns, **kwargs):
-        super().__init__(master, **kwargs)
-
-        self.columns = columns
-        self.sort_directions = {col: None for col in self.columns}  # None, True (ASC), False (DESC)
-        self.dragged_item = None
-
-        # --- build interface ---
-        scrollbar = ttk.Scrollbar(self, orient="vertical")
-        scrollbar.pack(side="right", fill="y")
-
-        self.tree = ttk.Treeview(
-            self,
-            columns=self.columns,
-            selectmode="browse",
-            show="headings",
-            height=10,
-            yscrollcommand=scrollbar.set,
-        )
-        self.tree.bind("<ButtonPress-1>", self.__on_press)
-        self.tree.bind("<B1-Motion>", self.__on_drag)
-        self.tree.bind("<ButtonRelease-1>", self.__on_release)
-        self.tree.bind("<KeyPress-Page_Down>", lambda event: self.__on_move_up(True))
-        self.tree.bind("<KeyPress-Page_Up>", lambda event: self.__on_move_up(False))
-
-        for col in self.columns:
-            self.tree.heading(col, text=col, anchor='w', command=lambda c=col: self.__handle_sort(c))
-            self.tree.column(col, width=80, anchor="w")  # , stretch=(i == 0 or i == len(self.columns) - 1)
-
-        self.tree.pack(expand=True, fill=tk.BOTH)
-
-        scrollbar.config(command=self.tree.yview)
-
-    def load_data(self, data: list[dict]):
-        # clear table
-        for row in self.tree.get_children():
-            self.tree.delete(row)
-
-        # add records in the Treeview
-        for record in data:
-            self.tree.insert("", "end", values=[record[field] for field in self.columns])
-
-    def set_new_columns(self, columns):
-        self.columns = columns
-
-        self.tree.config(columns=self.columns)
-
-        for col in self.columns:
-            self.tree.heading(col, text=col, anchor='w', command=lambda c=col: self.__handle_sort(c))
-            self.tree.column(col, width=80, anchor="w")  # , stretch=(i == 0 or i == len(self.columns) - 1)
-
-    # --- binding ---
-    def __handle_sort(self, col):
-        current = self.sort_directions[col]
-        reverse = not current if current is not None else False
-
-        # Get all data
-        data = [(self.tree.set(iid, col), iid) for iid in self.tree.get_children('')]
-
-        # Try to sort numerically, fallback to string
-        try:
-            data.sort(key=lambda t: float(t[0]), reverse=reverse)
-        except ValueError:
-            data.sort(key=lambda t: t[0], reverse=reverse)
-
-        # Rearranging items in Treeview
-        for index, (val, iid) in enumerate(data):
-            self.tree.move(iid, '', index)
-
-        # Update sort directions
-        for c in self.columns:
-            self.sort_directions[c] = None  # reset others
-            self.tree.heading(c, text=c)  # reset heading
-
-        self.sort_directions[col] = reverse
-        self.tree.heading(col, text=f"{col} {self.ARROWS[reverse]}")
-
-    def __on_press(self, event):
-        dragged = self.tree.identify_row(event.y)
-        if not dragged:
-            return
-
-        self.dragged_item = dragged
-        self.tree.selection_set(self.dragged_item)
-
-    def __on_drag(self, event):
-        if not self.dragged_item:
-            return
-
-        target = self.tree.identify_row(event.y)
-        if not target or target == self.dragged_item:
-            return
-
-        index = self.tree.index(target)
-        self.tree.move(self.dragged_item, "", index)
-
-    def __on_release(self, event=None):
-        self.dragged_item = None
-
-    def __on_move_up(self, is_down):
-        selected = self.tree.selection()
-        if not selected:
-            return
-
-        selected_item = selected[0]
-        index = self.tree.index(selected_item)
-        new_index = index + (1 if is_down else -1)
-        self.tree.move(selected_item, "", new_index)
-        self.tree.selection_set(selected_item)
-
 
 # main class
 class Application(tk.Tk):
     def __init__(self):
         super().__init__()
         self.encryptor = Encryptor()
-        self.settings_handler = SettingsHandler(DB_NAME)
-        self.db_handler = DBHandler(DB_NAME)
+        self.settings_handler = SettingsHandler()
+        self.db_handler = DBHandler()
 
         # --- DB init & verify ---
-        db_initer = DatabaseInitializer(DB_NAME, True)
+        db_initer = DatabaseInitializer(True)
         db_initer.verify_and_init_db()
 
         # user params
@@ -790,6 +722,8 @@ class Application(tk.Tk):
         self.access_role = None    # DEFAULT_ADMIN_ROLE or DEFAULT_USER_ROLE
 
         # --- build interface ---
+        self.geometry("500x350")
+
         container = tk.Frame(self)
         container.pack(side="top", fill="both", expand=True)
         container.grid_rowconfigure(0, weight=1)
@@ -844,6 +778,203 @@ class Application(tk.Tk):
         return self.is_authentication_turn_on
 
 
+# --- custom widgets ---
+class EditableTreeview(ttk.Treeview):
+    def __init__(self, master=None, validate_command=None, **kwargs):
+        super().__init__(master, **kwargs)
+        self.bind("<Double-1>", self.on_double_click)
+        self.bind("<Configure>", self.on_resize)
+        self.bind("<ButtonRelease-1>", self.on_resize)
+
+        self.validate_command = validate_command
+
+        self.entry = None
+        self._editing_info = None
+
+    def on_double_click(self, event):
+        region = self.identify("region", event.x, event.y)
+        if region not in ("cell", "tree"):
+            return
+
+        row_id = self.identify_row(event.y)
+        column = self.identify_column(event.x)
+
+        if not row_id:
+            return
+
+        self.show_entry(row_id, column)
+
+    def show_entry(self, row_id, column):
+        bbox = self.bbox(row_id, column)
+        if not bbox:
+            return
+
+        x, y, width, height = bbox
+
+        # Отримуємо поточне значення
+        if column == "#0":  # Це дерево (текст вузла)
+            value = self.item(row_id, "text")
+        else:
+            value = self.set(row_id, column)
+
+        if self.entry:
+            self.entry.destroy()
+
+        self.entry = tk.Entry(self)
+        self.entry.place(x=x, y=y, width=width, height=height)
+        self.entry.insert(0, value)
+        self.entry.focus()
+
+        self.entry.bind("<Return>", lambda e: self.save_edit(row_id, column))
+        self.entry.bind("<Escape>", lambda e: self.cancel_edit())
+
+        self._editing_info = (row_id, column)
+
+    def save_edit(self, item, column):
+        if self.entry:
+            new_value = self.entry.get()
+
+            if self.validate_command:
+                if column == "#0":  # Це дерево (текст вузла)
+                    old_value = self.item(item, "text")
+                else:
+                    old_value = self.set(item, column)
+                cmd_res = self.validate_command(old_value, new_value)
+                if not cmd_res:
+                    return
+
+            if column == "#0":
+                self.item(item, text=new_value)
+            else:
+                self.set(item, column, new_value)
+
+            self.entry.destroy()
+            self.entry = None
+            self._editing_info = None
+
+    def cancel_edit(self):
+        if self.entry:
+            self.entry.destroy()
+            self.entry = None
+            self._editing_info = None
+
+    def on_resize(self, event=None):
+        if self.entry and self._editing_info:
+            row_id, column = self._editing_info
+            bbox = self.bbox(row_id, column)
+            if bbox:
+                x, y, width, height = bbox
+                self.entry.place(x=x, y=y, width=width, height=height)
+
+
+class SortableEditableTreeview(EditableTreeview):
+    ARROWS = {False: "\u25BC", True: "\u25B2"}
+
+    def __init__(self, master, **kwargs):
+        super().__init__(master, **kwargs)
+
+        self.columns = kwargs["columns"]
+        self.sort_directions = {col: None for col in self.columns}  # None, True (ASC), False (DESC)
+        self.dragged_item = None
+
+        self.bind("<ButtonPress-1>", self.__on_press)
+        self.bind("<B1-Motion>", self.__on_drag)
+        self.bind("<ButtonRelease-1>", self.__on_release)
+        self.bind("<KeyPress-Page_Down>", lambda event: self.__on_move_up(True))
+        self.bind("<KeyPress-Page_Up>", lambda event: self.__on_move_up(False))
+
+        self.set_new_columns(self.columns)
+
+    def clear_table(self):
+        for row in self.get_children():
+            self.delete(row)
+
+    def load_data(self, data: list[dict]):
+        # clear table
+        for row in self.get_children():
+            self.delete(row)
+
+        # add records in the Treeview
+        for record in data:
+            self.insert("", "end", values=[record[field] for field in self.columns])
+
+    def set_new_columns(self, columns: list[str]):
+        self.columns = columns
+
+        self.sort_directions = {col: None for col in self.columns}
+
+        self.config(columns=self.columns)
+
+        tree_width = self.winfo_width()
+        if len(self.columns) == 0 or tree_width < len(self.columns):
+            col_width = 3
+        else:
+            col_width = tree_width // len(self.columns)
+
+        for col in self.columns:
+            self.heading(col, text=col, anchor='w', command=lambda c=col: self.__handle_sort(c))
+            self.column(col, width=col_width, anchor="w")  # , stretch=(i == 0 or i == len(self.columns) - 1)
+
+    # --- binding ---
+    def __handle_sort(self, col):
+        current = self.sort_directions[col]
+        reverse = not current if current is not None else False
+
+        # Get all data
+        data = [(self.set(iid, col), iid) for iid in self.get_children('')]
+
+        # Try to sort numerically, fallback to string
+        try:
+            data.sort(key=lambda t: float(t[0]), reverse=reverse)
+        except ValueError:
+            data.sort(key=lambda t: t[0], reverse=reverse)
+
+        # Rearranging items in Treeview
+        for index, (val, iid) in enumerate(data):
+            self.move(iid, '', index)
+
+        # Update sort directions
+        for c in self.columns:
+            self.sort_directions[c] = None  # reset others
+            self.heading(c, text=c)  # reset heading
+
+        self.sort_directions[col] = reverse
+        self.heading(col, text=f"{col} {self.ARROWS[reverse]}")
+
+    def __on_press(self, event):
+        dragged = self.identify_row(event.y)
+        if not dragged:
+            return
+
+        self.dragged_item = dragged
+        self.selection_set(self.dragged_item)
+
+    def __on_drag(self, event):
+        if not self.dragged_item:
+            return
+
+        target = self.identify_row(event.y)
+        if not target or target == self.dragged_item:
+            return
+
+        index = self.index(target)
+        self.move(self.dragged_item, "", index)
+
+    def __on_release(self, event=None):
+        self.dragged_item = None
+
+    def __on_move_up(self, is_down):
+        selected = self.selection()
+        if not selected:
+            return
+
+        selected_item = selected[0]
+        index = self.index(selected_item)
+        new_index = index + (1 if is_down else -1)
+        self.move(selected_item, "", new_index)
+        self.selection_set(selected_item)
+
+
 # --- menu frames ---
 class MainMenu(ttk.Frame):
     def __init__(self, parent, controller: Application, *args, **kwargs):
@@ -851,10 +982,12 @@ class MainMenu(ttk.Frame):
         self.parent = parent
         self.controller = controller
         self.users_handler = UsersHandler()
+        self.def_table_handler = DefaultTableHandler()
         self.logger = Logger()
 
-        self.field_names = self.users_handler.get_field_names()
+        self.field_names = self.def_table_handler.get_field_names()
 
+        self.modal = None
         self._build_interface()
 
         self.controller.bind("<<show_frame>>", self.update_frame, add="+")
@@ -878,8 +1011,20 @@ class MainMenu(ttk.Frame):
         frame_body = ttk.Frame(self, width=450)
         frame_body.pack(expand=True, fill=tk.BOTH, padx=10)
 
-        self.tree = CustomTreeview(frame_body, self.field_names)
+        scrollbar = ttk.Scrollbar(frame_body, orient="vertical")
+        scrollbar.pack(side="right", fill="y")
+
+        self.tree = SortableEditableTreeview(
+            frame_body,
+            columns = self.field_names,
+            selectmode = "browse",
+            show = "headings",
+            height = 8,
+            yscrollcommand = scrollbar.set,
+        )
         self.tree.pack(expand=True, fill=tk.BOTH, padx=10, pady=10)
+
+        scrollbar.config(command=self.tree.yview)
 
         self.load_data()
         # ----- --- -- ---- ----- -----
@@ -894,13 +1039,13 @@ class MainMenu(ttk.Frame):
         button_del_record = ttk.Button(frame_footer, text="Delete", command=self.__on_delete_clicked, width=15)
         button_del_record.pack(side=tk.LEFT)
 
-        button_table_setting = ttk.Button(frame_footer, text="Setup Table", command=None, width=15)
+        button_table_setting = ttk.Button(frame_footer, text="Set up Table", command=self.__on_set_up_table_clicked, width=15)
         button_table_setting.pack(side=tk.RIGHT)
         # ----- --- -- ------ ----- -----
 
     def load_data(self, event=None):
         # data getting from DB
-        records = self.users_handler.get_records()
+        records = self.def_table_handler.get_records()
 
         self.tree.load_data(records)
 
@@ -931,22 +1076,39 @@ class MainMenu(ttk.Frame):
 
     # --- button binding ---
     def __on_add_new_clicked(self):
-        modal = self.__create_modal("Add Record")
+        modal = self.__create_modal("Add New Record")
 
-        frame = NewAccountMenu(parent=modal, controller=None, comm=lambda: self.__on_modal_new_account_created(modal))
-        frame.grid(row=0, column=0, sticky="nsew")
+        new_record_menu = NewRecordMenu(modal, self.tree, self.field_names)
+        new_record_menu.pack(expand=True, fill=tk.BOTH)
 
     def __on_delete_clicked(self):
         selected_item = self.tree.selection()
         if not selected_item:
             return
+
         selected_item_iid = selected_item[0]
-        self.users_handler.remove(self.tree.set(selected_item_iid)["id"])
+        columns = self.tree["columns"]
+
+        values = {col: self.tree.set(selected_item_iid, col) for col in columns}
+
+        self.def_table_handler.delete_record(values)
         self.tree.delete(selected_item_iid)
 
-    # def __on_modal_new_account_created(self, modal):
-    #     modal.destroy()
-    #     self.load_data()
+    def __on_close_set_up_table_modal(self):
+        self.field_names = self.def_table_handler.get_field_names()
+        self.tree.clear_table()
+        self.tree.set_new_columns(self.field_names)
+        self.load_data()
+        self.modal.destroy()
+
+    def __on_set_up_table_clicked(self):
+        self.modal = self.__create_modal("Table Settings")
+        self.modal.protocol("WM_DELETE_WINDOW", self.__on_close_set_up_table_modal)
+
+        table_settings_menu = TableSettingsMenu(self.modal)
+        table_settings_menu.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
+
+        table_settings_menu.load_data(self.field_names)
 
     def __on_logout_clicked(self):
         self.users_handler.logout_authenticated_user()
@@ -961,7 +1123,7 @@ class MainMenu(ttk.Frame):
         modal = self.__create_modal("Logs")
         modal.resizable(width=True, height=True)
 
-        tree = CustomTreeview(modal, field_names)
+        tree = SortableEditableTreeview(modal, field_names)
         tree.load_data(records)
         tree.pack(expand=True, fill=tk.BOTH, padx=10, pady=10)
 
@@ -1223,6 +1385,199 @@ class NewAccountMenu(ttk.Frame):
         self.is_first_account_mod = False
 
         self.data_entry_form.config_control_widget("role", state="readonly")    # role combobox
+
+
+class NewRecordMenu(ttk.Frame):
+    def __init__(self, toplevel: tk.Toplevel, tree: ttk.Treeview, field_names,  *args, **kwargs):
+        super().__init__(toplevel, *args, **kwargs)
+        self.def_table_handler = DefaultTableHandler()
+        self.controller = toplevel
+        self.tree = tree
+
+        self.entry_form_fields_data = [
+            {"var_name": field_name, "type": FieldType.ENTRY}
+            for field_name in field_names
+        ]
+        self.var_names = [field_data["var_name"] for field_data in self.entry_form_fields_data]
+        self.entry_form_button_parameters = [
+            {"text": "Add", "command": self.add_new_record, "width": 15},
+            {"text": "Cancel", "command": self.controller.destroy, "width": 15},
+        ]
+
+        self.data_entry_form = DataEntryForm(
+            self, "Add New Record",
+            self.entry_form_fields_data, self.entry_form_button_parameters
+        )
+        self.data_entry_form.pack(fill=tk.BOTH, expand=True)
+
+    def add_new_record(self):
+        data = {var_name: self.data_entry_form.get_field_value(var_name) for var_name in self.var_names}
+
+        # varify empty fields
+        if all([not value for value in data.values()]):
+            messagebox.showwarning("Login Menu", f"Не можуть всі поля бути пусті!")
+            return
+
+        self.def_table_handler.add_record(data)
+        self.tree.insert("", 0, values=tuple(data.values()))
+
+        self.controller.destroy()
+
+
+class TableSettingsMenu(ttk.Frame):
+    def __init__(self, master, *args, **kwargs):
+        super().__init__(master, *args, **kwargs)
+        self.def_table_handler = DefaultTableHandler()
+
+        self.var_new_col = tk.StringVar()
+
+        self.frame_tree = ttk.Frame(self)
+        self.frame_tree.grid(row=0, column=0, sticky=tk.NSEW)
+        self.frame_add_new_colum = ttk.Frame(self)
+        self.frame_add_new_colum.grid(row=0, column=0, sticky=tk.NSEW)
+        self.__build_interface()
+
+        self.frame_tree.tkraise()
+
+    def __build_interface(self):
+        # --- header ---
+        frame_header = ttk.Frame(self.frame_tree)
+        frame_header.pack(fill=tk.X)
+
+        button_info = ttk.Button(frame_header, text="?", width=3, command=self.show_info)
+        button_info.pack(side=tk.LEFT)
+
+        # --- tree ---
+        scrollbar = ttk.Scrollbar(self.frame_tree, orient="vertical")
+        scrollbar.pack(side="right", fill="y")
+
+        self.tree = EditableTreeview(
+            self.frame_tree,
+            validate_command=self.__before_edit_col_name,
+            selectmode="browse",
+            show="tree",
+            height=10,
+            yscrollcommand=scrollbar.set,
+        )
+
+        self.tree.pack(expand=True, fill=tk.BOTH)
+
+        scrollbar.config(command=self.tree.yview)
+
+        frame_tree_button = ttk.Frame(self.frame_tree)
+        frame_tree_button.pack(fill=tk.X, padx=5, pady=5)
+
+        frame_tree_button.grid_rowconfigure(0, weight=1)
+        frame_tree_button.grid_columnconfigure(0, weight=1)
+        frame_tree_button.grid_columnconfigure(1, weight=1)
+
+        button_add_new_column = ttk.Button(
+            frame_tree_button, text="Add New",
+            command=lambda: self.frame_add_new_colum.tkraise()
+        )
+        button_add_new_column.grid(row=0, column=0)
+
+        button_delete_column = ttk.Button(
+            frame_tree_button, text="Delete",
+            command=self.__on_delete_column
+        )
+        button_delete_column.grid(row=0, column=1)
+
+        # --- new column ---
+        self.frame_add_new_colum.grid_rowconfigure(0, weight=1)
+        self.frame_add_new_colum.grid_rowconfigure(1, weight=1)
+        self.frame_add_new_colum.grid_rowconfigure(2, weight=1)
+        self.frame_add_new_colum.grid_columnconfigure(0, weight=1)
+        self.frame_add_new_colum.grid_columnconfigure(1, weight=1)
+
+        label = ttk.Label(self.frame_add_new_colum, text="Column name:", font=("Arial", 15))
+        label.grid(column=0, row=0, columnspan=2, padx=5, pady=5)
+
+        entry = ttk.Entry(self.frame_add_new_colum, textvariable=self.var_new_col)
+        entry.grid(column=0, row=1, columnspan=2, padx=5, pady=5)
+
+        button_apply = ttk.Button(self.frame_add_new_colum, text="Apply", command=self.__on_add_new_column)
+        button_apply.grid(column=0, row=2, padx=5, pady=5)
+
+        button_cancel = ttk.Button(self.frame_add_new_colum, text="Cancel", command=lambda: self.frame_tree.tkraise())
+        button_cancel.grid(column=1, row=2, padx=5, pady=5)
+
+    def __before_edit_col_name(self, old_value, new_value):
+        if not new_value:
+            messagebox.showwarning("Column edit", "Не можна вести порожнє значення!")
+            return False
+
+        if not self.__validate_english_letters(new_value):
+            messagebox.showwarning("Column edit", "Використовуйте тільки англійські літери та символ _")
+            return False
+
+        try:
+            self.def_table_handler.rename_column(old_value, new_value)
+        except Exception as e:
+            messagebox.showerror("Column edit", f"Не вдалося змінити назви колонки!\nОпис проблеми:\n{e}")
+            return False
+        return True
+
+    @staticmethod
+    def __validate_english_letters(value) -> bool:
+        return fullmatch(r"[a-zA-Z_]*", value) is not None
+
+    def __on_delete_column(self):
+        selection = self.tree.selection()
+        if not selection:
+            messagebox.showinfo("Column delete", "Оберіть колонку для видалення!")
+            return
+
+        selected_item = selection[0]
+        col_name = self.tree.item(selected_item, "text")
+
+        result = messagebox.askyesno("Column delete", f"Ви впевнені, що хочете видалити колонку {col_name}?\nДані будуть втрачені!")
+
+        if result:
+            try:
+                self.def_table_handler.delete_column(col_name)
+                self.tree.delete(selected_item)
+            except Exception as e:
+                messagebox.showerror("Column delete", f"Не вдалося видалити колонки!\nОпис проблеми:\n{e}")
+                return
+
+    def __on_add_new_column(self):
+        value = self.var_new_col.get()
+
+        if not value:
+            messagebox.showwarning("New Column", "Не можна вести порожнє значення!")
+            return False
+
+        if not self.__validate_english_letters(value):
+            messagebox.showwarning("New Column", "Використовуйте тільки англійські літери та символ _")
+            return
+
+        if value in self.tree["columns"]:
+            messagebox.showwarning("New Column", "Така колонка вже існує!")
+            return
+
+        try:
+            self.def_table_handler.add_column(value)
+            self.tree.insert("", "end", text=value)
+        except Exception as e:
+            messagebox.showerror("New Column", "Не вдалося додати колонки!\nОпис проблеми:\n{e}")
+            return
+
+        self.frame_tree.tkraise()
+
+    def load_data(self, data: list[str]):
+        for col in data:
+            self.tree.insert("", "end", text=col)
+
+    @staticmethod
+    def show_info():
+        messagebox.showinfo("Info", (
+            "[➕] Щоб додати нову колонку натисніть на кнопку 'Add New'.\n"
+            "[✏️] Щоб змінити назву колонки два рази клацніть лівою кнопкою миші на назві колонки. Тоді 'Enter', "
+            "щоб підтвердити або 'Escape', щоб скасувати.\n"
+            "[🗑️] Щоб видалити колонку клацніть на неї у списку, щоб вона виділилась, тоді клацніть на кнопку "
+            "'Delete'.\n"
+        ))
 # ~~~~~~~~~~~~~~~ ~~~~~~~~ ~~~~~~~~~~~~~~~
 
 if __name__ == "__main__":

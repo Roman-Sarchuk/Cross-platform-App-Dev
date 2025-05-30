@@ -780,13 +780,13 @@ class Application(tk.Tk):
 
 # --- custom widgets ---
 class EditableTreeview(ttk.Treeview):
-    def __init__(self, master=None, validate_command=None, **kwargs):
+    def __init__(self, master, validate_command=None, **kwargs):
+        self.validate_command = validate_command
         super().__init__(master, **kwargs)
+
         self.bind("<Double-1>", self.on_double_click)
         self.bind("<Configure>", self.on_resize)
         self.bind("<ButtonRelease-1>", self.on_resize)
-
-        self.validate_command = validate_command
 
         self.entry = None
         self._editing_info = None
@@ -866,8 +866,18 @@ class EditableTreeview(ttk.Treeview):
                 x, y, width, height = bbox
                 self.entry.place(x=x, y=y, width=width, height=height)
 
+    @staticmethod
+    def get_info_doc():
+        return (
+            "[➕] Щоб додати нову колонку натисніть на кнопку 'Add New'.\n"
+            "[✏️] Щоб змінити назву колонки два рази клацніть лівою кнопкою миші на назві колонки. Тоді 'Enter', "
+            "щоб підтвердити або 'Escape', щоб скасувати.\n"
+            "[🗑️] Щоб видалити колонку клацніть на неї у списку, щоб вона виділилась, тоді клацніть на кнопку "
+            "'Delete'.\n"
+        )
 
-class SortableEditableTreeview(EditableTreeview):
+
+class SortableTreeview(ttk.Treeview):
     ARROWS = {False: "\u25BC", True: "\u25B2"}
 
     def __init__(self, master, **kwargs):
@@ -973,6 +983,26 @@ class SortableEditableTreeview(EditableTreeview):
         new_index = index + (1 if is_down else -1)
         self.move(selected_item, "", new_index)
         self.selection_set(selected_item)
+
+    @staticmethod
+    def get_info_doc():
+        return (
+            "[⇅] Натисніть на заголовок колонки, щоб відсортувати її. При повторному натискані на заголовок "
+            "зміниться напрямок сортування.\n"
+            "[↕] Затримайте на рядку із даними, щоб перемістити його та перетягуйте. Також можна переміщати "
+            "використовуючи клавіші PageUp/PageDown."
+        )
+
+
+class SortableEditableTreeview(SortableTreeview, EditableTreeview):
+    def __init__(self, master, validate_command=None, **kwargs):
+        super().__init__(master=master, validate_command=validate_command, **kwargs)
+
+    @staticmethod
+    def get_info_doc():
+        editable_info = EditableTreeview.get_info_doc()
+        sortable_info = SortableTreeview.get_info_doc()
+        return f"{editable_info}\n{"-"*50}\n{sortable_info}"
 
 
 # --- menu frames ---
@@ -1569,15 +1599,8 @@ class TableSettingsMenu(ttk.Frame):
         for col in data:
             self.tree.insert("", "end", text=col)
 
-    @staticmethod
-    def show_info():
-        messagebox.showinfo("Info", (
-            "[➕] Щоб додати нову колонку натисніть на кнопку 'Add New'.\n"
-            "[✏️] Щоб змінити назву колонки два рази клацніть лівою кнопкою миші на назві колонки. Тоді 'Enter', "
-            "щоб підтвердити або 'Escape', щоб скасувати.\n"
-            "[🗑️] Щоб видалити колонку клацніть на неї у списку, щоб вона виділилась, тоді клацніть на кнопку "
-            "'Delete'.\n"
-        ))
+    def show_info(self):
+        messagebox.showinfo("Info", self.tree.get_info_doc())
 # ~~~~~~~~~~~~~~~ ~~~~~~~~ ~~~~~~~~~~~~~~~
 
 if __name__ == "__main__":

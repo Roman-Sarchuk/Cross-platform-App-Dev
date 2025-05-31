@@ -472,6 +472,7 @@ class Logger(Singleton):
             self.db_handler = DBHandler()
             self.encryptor = Encryptor()
             self.user_id = None
+            self.is_logging_turn_on = False
 
             self._initialized = True
 
@@ -488,6 +489,9 @@ class Logger(Singleton):
         return operation_types
 
     def add(self, operation_type: OperationType, description:str=""):
+        if not self.is_logging_turn_on:
+            return
+
         if not self.user_id:
             raise ValueError("user_id isn't set")
 
@@ -527,6 +531,15 @@ class Logger(Singleton):
 
     def get_field_names(self):
         return self.FIELDS
+
+    def set_logging_state(self, value: bool):
+        self.is_logging_turn_on = value
+
+    @staticmethod
+    def clear_logs():
+        with sqlite3.connect(DB_NAME) as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM logs;")
 
 
 class UsersHandler(Singleton):
@@ -709,20 +722,27 @@ class FieldType(Enum):
 class Application(tk.Tk):
     def __init__(self):
         super().__init__()
+        # DB init & verify
+        db_initer = DatabaseInitializer(True)
+        db_initer.verify_and_init_db()
+
+        # DB interaction
         self.encryptor = Encryptor()
         self.settings_handler = SettingsHandler()
         self.db_handler = DBHandler()
 
-        # --- DB init & verify ---
-        db_initer = DatabaseInitializer(True)
-        db_initer.verify_and_init_db()
-
         # user params
-        self.is_authentication_turn_on = self.settings_handler.get_value(SettingName.AUTHENTICATION)
         self.access_role = None    # DEFAULT_ADMIN_ROLE or DEFAULT_USER_ROLE
+        self.var_authentication = tk.BooleanVar(value=self.settings_handler.get_value(SettingName.AUTHENTICATION))
+        self.var_logging = tk.BooleanVar(value=self.settings_handler.get_value(SettingName.LOGS))
+        Logger().set_logging_state(self.var_logging.get())
 
         # --- build interface ---
+        self.title("Arcanite")
         self.geometry("500x350")
+
+        self.menubar = tk.Menu(self)
+        self.config(menu=self.menubar)
 
         container = tk.Frame(self)
         container.pack(side="top", fill="both", expand=True)
@@ -746,12 +766,14 @@ class Application(tk.Tk):
         self.back_menu = self.current_menu
         self.current_menu = frame_class
 
+        self.menubar.delete(0, "end")
+
         frame = self.frames[frame_class]
-        self.event_generate("<<show_frame>>")
+        self.event_generate("<<show_frame>>", data="DATA1224")
         frame.tkraise()
 
     def open_start_menu(self):
-        if self.is_authentication_turn_on:
+        if self.var_authentication.get():
             user_count = self.db_handler.get_row_count(TableName.USERS)
             if user_count > 0:
                 self.show_frame(LoginMenu)
@@ -774,8 +796,19 @@ class Application(tk.Tk):
     def get_access_role(self) -> str:
         return self.access_role if self.access_role else ""
 
-    def is_authentication(self):
-        return self.is_authentication_turn_on
+    @staticmethod
+    def get_info_doc():
+        return (
+            "Версія: Arcanite 1.0v\n"
+            "Автор: roman.sarchuk.pp.2023@lpnu.ua\n"
+            "Ліцензія: MIT\n"
+            "Загальна інформація:\n"
+            "Це десктопна програма з графічним інтерфейсом, створена на базі бібліотеки Tkinter (Python), "
+            "яка взаємодіє з локальною базою даних SQLite. Програма забезпечує безпечну роботу з даними, "
+            "використовуючи аутентифікацію користувачів, авторизацію, шифрування чутливої інформації та "
+            "логування всіх дій користувача. Надає можливість вмикати/вимикати аутентифікацію та логування, "
+            "забезпечуючи гнучке використання застосунку залежно від потреб користувача."
+        )
 
 
 # --- custom widgets ---
@@ -890,8 +923,6 @@ class SortableTreeview(ttk.Treeview):
         self.bind("<ButtonPress-1>", self.__on_press)
         self.bind("<B1-Motion>", self.__on_drag)
         self.bind("<ButtonRelease-1>", self.__on_release)
-        self.bind("<KeyPress-Page_Down>", lambda event: self.__on_move_up(True))
-        self.bind("<KeyPress-Page_Up>", lambda event: self.__on_move_up(False))
 
         self.set_new_columns(self.columns)
 
@@ -917,7 +948,7 @@ class SortableTreeview(ttk.Treeview):
 
         tree_width = self.winfo_width()
         if len(self.columns) == 0 or tree_width < len(self.columns):
-            col_width = 3
+            col_width = 5
         else:
             col_width = tree_width // len(self.columns)
 
@@ -989,8 +1020,7 @@ class SortableTreeview(ttk.Treeview):
         return (
             "[⇅] Натисніть на заголовок колонки, щоб відсортувати її. При повторному натискані на заголовок "
             "зміниться напрямок сортування.\n"
-            "[↕] Затримайте на рядку із даними, щоб перемістити його та перетягуйте. Також можна переміщати "
-            "використовуючи клавіші PageUp/PageDown."
+            "[↕] Затримайте на рядку із даними, щоб перемістити його та перетягуйте."
         )
 
 
@@ -1002,7 +1032,7 @@ class SortableEditableTreeview(SortableTreeview, EditableTreeview):
     def get_info_doc():
         editable_info = EditableTreeview.get_info_doc()
         sortable_info = SortableTreeview.get_info_doc()
-        return f"{editable_info}\n{"-"*50}\n{sortable_info}"
+        return f"{editable_info}{"-"*50}\n{sortable_info}"
 
 
 # --- menu frames ---
@@ -1012,6 +1042,7 @@ class MainMenu(ttk.Frame):
         self.parent = parent
         self.controller = controller
         self.users_handler = UsersHandler()
+        self.settings_handler = SettingsHandler()
         self.def_table_handler = DefaultTableHandler()
         self.logger = Logger()
 
@@ -1029,6 +1060,7 @@ class MainMenu(ttk.Frame):
         frame_header.pack(anchor="n", fill=tk.X, padx=10, pady=10)
 
         self.user_label = ttk.Label(frame_header, text="USER-NAME")
+        self.user_label.pack(side=tk.LEFT)
 
         self.logout_button = ttk.Button(
             frame_header,
@@ -1046,6 +1078,7 @@ class MainMenu(ttk.Frame):
 
         self.tree = SortableEditableTreeview(
             frame_body,
+            validate_command=None,
             columns = self.field_names,
             selectmode = "browse",
             show = "headings",
@@ -1080,18 +1113,55 @@ class MainMenu(ttk.Frame):
         self.tree.load_data(records)
 
     def update_frame(self, event=None):
-        if self.controller.is_authentication():
-            self.user_label.configure(text=self.users_handler.get_authenticated_user_name() + f" ({self.controller.get_access_role()})")
-            self.user_label.pack(side=tk.LEFT)
+        if self.controller.current_menu != MainMenu:
+            return
+
+        edit_menu = tk.Menu(self.controller.menubar, tearoff=0)
+        edit_menu.add_command(label="Додати запис", command=self.__on_add_new_clicked)
+        edit_menu.add_command(label="Видалити обраний запис", command=self.__on_delete_clicked)
+        edit_menu.add_command(label="Налаштувати таблицю", command=self.__on_set_up_table_clicked)
+        self.controller.menubar.add_cascade(label="Редагувати", menu=edit_menu)
+
+        if self.controller.var_authentication.get():
+            # authentication is turn ON
+            self.user_label.configure(
+                text=self.users_handler.get_authenticated_user_name() + f" ({self.controller.get_access_role()})"
+            )
             self.logout_button.pack(side=tk.RIGHT)
-            if self.controller.get_access_role() == DEFAULT_ADMIN_ROLE:
-                pass
-            else:
-                pass
         else:
+            # authentication is turn OFF
             self.user_label.configure(text="ADMIN")
-            self.user_label.pack(side=tk.LEFT)
             self.logout_button.pack_forget()
+
+        if not self.controller.var_authentication.get() or self.controller.get_access_role() == DEFAULT_ADMIN_ROLE:
+            # authentication is turn OFF or access_role is ADMIN
+            setting_menu = tk.Menu(self.controller.menubar, tearoff=0)
+            setting_menu.add_checkbutton(
+                label="Автентифікація користувачів",
+                variable=self.controller.var_authentication, command=self.__on_menu_change_authentication
+            )
+            setting_menu.add_checkbutton(
+                label="Логування операцій",
+                variable=self.controller.var_logging, command=self.__on_menu_change_logging
+            )
+            self.controller.menubar.add_cascade(label="Налаштування", menu=setting_menu)
+
+            admin_panel_menu = tk.Menu(self.controller.menubar, tearoff=0)
+            admin_panel_menu.add_command(label="Переглянути логи", command=self.__on_menu_view_logs_clicked)
+            admin_panel_menu.add_command(label="Видалити логи", command=self.__on_menu_delete_logs_clicked)
+            admin_panel_menu.add_command(label="Відкрити панель користувачів", command=self.__on_menu_user_panel_clicked)
+            self.controller.menubar.add_cascade(label="Адмін-панель", menu=admin_panel_menu)
+
+        help_menu = tk.Menu(self.controller.menubar, tearoff=0)
+        help_menu.add_command(
+            label="Про програму",
+            command=lambda: messagebox.showinfo("Про програму", self.controller.get_info_doc())
+        )
+        help_menu.add_command(
+            label="Як взаємодіяти із таблицею",
+            command=lambda: messagebox.showinfo("Як взаємодіяти із таблицею", self.tree.get_info_doc())
+        )
+        self.controller.menubar.add_cascade(label="Інфо.", menu=help_menu)
 
     def __create_modal(self, title: str) -> tk.Toplevel:
         top_level = tk.Toplevel(self.controller)
@@ -1104,7 +1174,12 @@ class MainMenu(ttk.Frame):
 
         return top_level
 
-    # --- button binding ---
+    # --- binding function ---
+    def __on_logout_clicked(self):
+        self.users_handler.logout_authenticated_user()
+        self.controller.set_access_role(None)
+        self.controller.open_start_menu()
+
     def __on_add_new_clicked(self):
         modal = self.__create_modal("Add New Record")
 
@@ -1114,6 +1189,7 @@ class MainMenu(ttk.Frame):
     def __on_delete_clicked(self):
         selected_item = self.tree.selection()
         if not selected_item:
+            messagebox.showwarning("Видалення...", "Спершу оберіть запис у таблиці!")
             return
 
         selected_item_iid = selected_item[0]
@@ -1140,11 +1216,15 @@ class MainMenu(ttk.Frame):
 
         table_settings_menu.load_data(self.field_names)
 
-    def __on_logout_clicked(self):
-        self.users_handler.logout_authenticated_user()
+    def __on_menu_change_authentication(self):
+        self.settings_handler.update(SettingName.AUTHENTICATION, self.controller.var_authentication.get())
         self.controller.open_start_menu()
 
-    def __on_view_logs_clicked(self):
+    def __on_menu_change_logging(self):
+        self.settings_handler.update(SettingName.LOGS, self.controller.var_logging.get())
+        self.logger.set_logging_state(self.controller.var_logging.get())
+
+    def __on_menu_view_logs_clicked(self):
         # data getting from DB
         field_names = self.logger.get_field_names()
         records = self.logger.get_records()
@@ -1152,10 +1232,32 @@ class MainMenu(ttk.Frame):
         # build interface
         modal = self.__create_modal("Logs")
         modal.resizable(width=True, height=True)
+        modal.geometry("450x250")
 
-        tree = SortableEditableTreeview(modal, field_names)
+        scrollbar = ttk.Scrollbar(modal, orient="vertical")
+        scrollbar.pack(side="right", fill="y")
+
+        tree = SortableTreeview(
+            modal,
+            columns=field_names,
+            selectmode="browse",
+            show="headings",
+            height=10,
+            yscrollcommand=scrollbar.set,
+        )
+        scrollbar.config(command=tree.yview)
         tree.load_data(records)
+
         tree.pack(expand=True, fill=tk.BOTH, padx=10, pady=10)
+
+    def __on_menu_delete_logs_clicked(self):
+        result = messagebox.askyesno("Видалення логів...", "Ви впевнені, що хочете видалити всі логи?")
+
+        if result:
+            self.logger.clear_logs()
+
+    def __on_menu_user_panel_clicked(self):
+        pass
 
 
 class DataEntryForm(ttk.Frame):

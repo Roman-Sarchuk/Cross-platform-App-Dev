@@ -45,6 +45,9 @@ class OperationType(Enum):
     INSERT = "insert"
     UPDATE = "update"
     DELETE = "delete"
+    NEW_COLUMN = "new_column"
+    DELETE_COLUMN = "delete_column"
+    RENAME_COLUMN = "update_column"
 
 
 class SettingName(Enum):
@@ -342,7 +345,7 @@ class DatabaseInitializer(Singleton):
             CREATE TABLE IF NOT EXISTS {TableName.LOGS.value} (
                 id INTEGER PRIMARY KEY,
                 operation_type_id INTEGER NOT NULL,
-                user_id INTEGER NOT NULL,
+                user_id INTEGER,
                 log_date DATETIME DEFAULT CURRENT_TIMESTAMP,
                 description TEXT,
                 FOREIGN KEY(operation_type_id) REFERENCES operation_types(id),
@@ -492,27 +495,30 @@ class Logger(Singleton):
         if not self.is_logging_turn_on:
             return
 
-        if not self.user_id:
-            raise ValueError("user_id isn't set")
-
         operation_type_rows = self.db_handler.get_rows(
             TableName.OPERATION_TYPES, {"hashed_name": self.encryptor.hash(operation_type.value)}
         )
         operation_type_id = operation_type_rows[0]["id"]
 
-        self.db_handler.insert(TableName.LOGS, {
-            "operation_type_id": operation_type_id,
-            "user_id": self.user_id,
-            "description": description
-        })
+        if not self.user_id:
+            self.db_handler.insert(TableName.LOGS, {
+                "operation_type_id": operation_type_id,
+                "description": description
+            })
+        else:
+            self.db_handler.insert(TableName.LOGS, {
+                "operation_type_id": operation_type_id,
+                "user_id": self.user_id,
+                "description": description
+            })
 
     def get_records(self):
         query = f"""
         SELECT l.id, o.name as operation, u.username, r.name as role, l.log_date as date, l.description
         FROM {TableName.LOGS.value} as l 
         JOIN {TableName.OPERATION_TYPES.value} as o ON l.operation_type_id=o.id
-        JOIN {TableName.USERS.value} as u ON l.user_id=u.id
-        JOIN {TableName.USER_ROLES.value} as r on u.role_id=r.id;
+        LEFT JOIN {TableName.USERS.value} as u ON l.user_id=u.id
+        LEFT JOIN {TableName.USER_ROLES.value} as r on u.role_id=r.id;
         """
 
         with sqlite3.connect(DB_NAME) as conn:
@@ -565,9 +571,9 @@ class UsersHandler(Singleton):
             "role_id": role_id
         })
 
-        try:
+        if self.logger.user_id:
             self.logger.add(OperationType.NEW_ACCOUNT)
-        except ValueError:
+        else:
             rows = self.db_handler.get_rows(TableName.USERS, {"login": login})
             user_id = rows[0]["id"]
             self.logger.set_user_id(user_id)
@@ -651,43 +657,70 @@ class UsersHandler(Singleton):
 
 
 class DefaultTableHandler(Singleton):
+    UNENCRYPTED_FIELDS = ["id"]
+
     def __init__(self):
         if not self._initialized:
+            self.encryptor = Encryptor()
             self.db_handler = DBHandler()
+            self.logger = Logger()
 
             self._initialized = True
 
     def add_record(self, row: dict):
+        for k, v in row.items():
+            row[k] = self.encryptor.encrypt_with_fernet(v)
+
         self.db_handler.insert(TableName.DEFAULT, row)
+        self.logger.add(OperationType.INSERT)
+
+    def _find_id_by_row(self, row: dict):
+        data = self.db_handler.get_rows(TableName.DEFAULT)
+        for record in data:
+            for k, v in record.items():
+                if k not in self.UNENCRYPTED_FIELDS:
+                    record[k] = self.encryptor.decrypt_with_fernet(v)
+            if all(record.get(key) == row.get(key) for key in row.keys()):
+                return record.get('id')
+        return None
 
     def delete_record(self, row: dict):
-        rows = self.db_handler.get_rows(TableName.DEFAULT, row)
-        row_id = rows[0]["id"]
+        row_id = self._find_id_by_row(row)
 
         self.db_handler.remove(TableName.DEFAULT, {"id": row_id})
+        self.logger.add(OperationType.DELETE, description=str(row))
 
     def edit_record(self, old_record: dict, new_row: dict):
-        rows = self.db_handler.get_rows(TableName.DEFAULT, old_record)
-        row_id = rows[0]["id"]
+        row_id = self._find_id_by_row(old_record)
 
-        self.db_handler.update(TableName.DEFAULT, new_row, {"id": row_id})
+        new_data = {}
+
+        for key, value in new_row:
+            if old_record[key] != new_row[key]:
+                new_data[key] = self.encryptor.encrypt_with_fernet(value)
+
+        if new_data:
+            self.db_handler.update(TableName.DEFAULT, new_data, {"id": row_id})
+            self.logger.add(OperationType.UPDATE, description=f"{new_data} -> {old_record}")
 
     def add_column(self, name: str):
         with sqlite3.connect(DB_NAME) as conn:
             cursor = conn.cursor()
             cursor.execute(f'ALTER TABLE {TableName.DEFAULT.value} ADD COLUMN {name} TEXT DEFAULT "";')
+        self.logger.add(OperationType.NEW_COLUMN)
 
-    @staticmethod
-    def delete_column(name: str):
+    def delete_column(self, name: str):
         with sqlite3.connect(DB_NAME) as conn:
             cursor = conn.cursor()
             cursor.execute(f"ALTER TABLE {TableName.DEFAULT.value} DROP COLUMN {name};")
+        self.logger.add(OperationType.DELETE_COLUMN, name)
 
     @staticmethod
-    def rename_column(old_name: str, new_name: str):
+    def rename_column(self, old_name: str, new_name: str):
         with sqlite3.connect(DB_NAME) as conn:
             cursor = conn.cursor()
             cursor.execute(f"ALTER TABLE {TableName.DEFAULT.value} RENAME COLUMN {old_name} TO {new_name};")
+        self.logger.add(OperationType.RENAME_COLUMN, f"{old_name} -> {new_name}")
 
     @staticmethod
     def get_field_names():
@@ -705,6 +738,8 @@ class DefaultTableHandler(Singleton):
         rows = self.db_handler.get_rows(TableName.DEFAULT)
         for row in rows:
             row.pop("id")
+            for k, v in row.items():
+                row[k] = self.encryptor.decrypt_with_fernet(v)
         return rows
 
 # ~~~~~~~~~~~~~~~ ~~~~~~~ ~~~~~~~~~~~~~~~
@@ -754,8 +789,8 @@ class Application(tk.Tk):
         self.current_menu = None
         self.back_menu = None
 
-        for F in (MainMenu, LoginMenu, NewAccountMenu):
-            frame = F(parent=container, controller=self)
+        for F in (MainMenu, LoginMenu, NewAccountMenu, UserMenu):
+            frame = F(container, self)
             self.frames[F] = frame
             frame.grid(row=0, column=0, sticky="nsew")
 
@@ -1035,6 +1070,18 @@ class SortableEditableTreeview(SortableTreeview, EditableTreeview):
         return f"{editable_info}{"-"*50}\n{sortable_info}"
 
 
+def create_modal(master: tk.Tk, title: str) -> tk.Toplevel:
+    top_level = tk.Toplevel(master)
+
+    # top_level setting
+    top_level.title(title)
+    top_level.resizable(width=False, height=False)
+    top_level.transient(master)
+    top_level.grab_set()
+
+    return top_level
+
+
 # --- menu frames ---
 class MainMenu(ttk.Frame):
     def __init__(self, parent, controller: Application, *args, **kwargs):
@@ -1052,7 +1099,6 @@ class MainMenu(ttk.Frame):
         self._build_interface()
 
         self.controller.bind("<<show_frame>>", self.update_frame, add="+")
-        self.controller.bind("<<new_account_created>>", self.load_data, add="+")
 
     def _build_interface(self):
         # ----- Set up Header frame -----
@@ -1128,13 +1174,31 @@ class MainMenu(ttk.Frame):
                 text=self.users_handler.get_authenticated_user_name() + f" ({self.controller.get_access_role()})"
             )
             self.logout_button.pack(side=tk.RIGHT)
+
+            if self.controller.get_access_role() == DEFAULT_ADMIN_ROLE:
+                # authentication is turn ON and access_role is ADMIN
+                setting_menu = tk.Menu(self.controller.menubar, tearoff=0)
+                setting_menu.add_checkbutton(
+                    label="Автентифікація користувачів",
+                    variable=self.controller.var_authentication, command=self.__on_menu_change_authentication
+                )
+                setting_menu.add_checkbutton(
+                    label="Логування операцій",
+                    variable=self.controller.var_logging, command=self.__on_menu_change_logging
+                )
+                self.controller.menubar.add_cascade(label="Налаштування", menu=setting_menu)
+
+                admin_panel_menu = tk.Menu(self.controller.menubar, tearoff=0)
+                admin_panel_menu.add_command(label="Переглянути логи", command=self.__on_menu_view_logs_clicked)
+                admin_panel_menu.add_command(label="Видалити логи", command=self.__on_menu_delete_logs_clicked)
+                admin_panel_menu.add_command(label="Відкрити панель користувачів",
+                                             command=self.__on_menu_user_panel_clicked)
+                self.controller.menubar.add_cascade(label="Адмін-панель", menu=admin_panel_menu)
         else:
             # authentication is turn OFF
             self.user_label.configure(text="ADMIN")
             self.logout_button.pack_forget()
 
-        if not self.controller.var_authentication.get() or self.controller.get_access_role() == DEFAULT_ADMIN_ROLE:
-            # authentication is turn OFF or access_role is ADMIN
             setting_menu = tk.Menu(self.controller.menubar, tearoff=0)
             setting_menu.add_checkbutton(
                 label="Автентифікація користувачів",
@@ -1149,7 +1213,6 @@ class MainMenu(ttk.Frame):
             admin_panel_menu = tk.Menu(self.controller.menubar, tearoff=0)
             admin_panel_menu.add_command(label="Переглянути логи", command=self.__on_menu_view_logs_clicked)
             admin_panel_menu.add_command(label="Видалити логи", command=self.__on_menu_delete_logs_clicked)
-            admin_panel_menu.add_command(label="Відкрити панель користувачів", command=self.__on_menu_user_panel_clicked)
             self.controller.menubar.add_cascade(label="Адмін-панель", menu=admin_panel_menu)
 
         help_menu = tk.Menu(self.controller.menubar, tearoff=0)
@@ -1163,17 +1226,6 @@ class MainMenu(ttk.Frame):
         )
         self.controller.menubar.add_cascade(label="Інфо.", menu=help_menu)
 
-    def __create_modal(self, title: str) -> tk.Toplevel:
-        top_level = tk.Toplevel(self.controller)
-
-        # top_level setting
-        top_level.title(title)
-        top_level.resizable(width=False, height=False)
-        top_level.transient(self.controller)
-        top_level.grab_set()
-
-        return top_level
-
     # --- binding function ---
     def __on_logout_clicked(self):
         self.users_handler.logout_authenticated_user()
@@ -1181,7 +1233,10 @@ class MainMenu(ttk.Frame):
         self.controller.open_start_menu()
 
     def __on_add_new_clicked(self):
-        modal = self.__create_modal("Add New Record")
+        if not self.field_names:
+            return
+
+        modal = create_modal(self.controller, "Add New Record")
 
         new_record_menu = NewRecordMenu(modal, self.tree, self.field_names)
         new_record_menu.pack(expand=True, fill=tk.BOTH)
@@ -1208,7 +1263,7 @@ class MainMenu(ttk.Frame):
         self.modal.destroy()
 
     def __on_set_up_table_clicked(self):
-        self.modal = self.__create_modal("Table Settings")
+        self.modal = create_modal(self.controller, "Table Settings")
         self.modal.protocol("WM_DELETE_WINDOW", self.__on_close_set_up_table_modal)
 
         table_settings_menu = TableSettingsMenu(self.modal)
@@ -1218,7 +1273,7 @@ class MainMenu(ttk.Frame):
 
     def __on_menu_change_authentication(self):
         self.settings_handler.update(SettingName.AUTHENTICATION, self.controller.var_authentication.get())
-        self.controller.open_start_menu()
+        self.__on_logout_clicked()
 
     def __on_menu_change_logging(self):
         self.settings_handler.update(SettingName.LOGS, self.controller.var_logging.get())
@@ -1230,7 +1285,7 @@ class MainMenu(ttk.Frame):
         records = self.logger.get_records()
 
         # build interface
-        modal = self.__create_modal("Logs")
+        modal = create_modal(self.controller, "Logs")
         modal.resizable(width=True, height=True)
         modal.geometry("450x250")
 
@@ -1257,7 +1312,7 @@ class MainMenu(ttk.Frame):
             self.logger.clear_logs()
 
     def __on_menu_user_panel_clicked(self):
-        pass
+        self.controller.show_frame(UserMenu)
 
 
 class DataEntryForm(ttk.Frame):
@@ -1550,8 +1605,8 @@ class NewRecordMenu(ttk.Frame):
             messagebox.showwarning("Login Menu", f"Не можуть всі поля бути пусті!")
             return
 
+        self.tree.insert("", "end", values=tuple(data.values()))
         self.def_table_handler.add_record(data)
-        self.tree.insert("", 0, values=tuple(data.values()))
 
         self.controller.destroy()
 
@@ -1703,6 +1758,141 @@ class TableSettingsMenu(ttk.Frame):
 
     def show_info(self):
         messagebox.showinfo("Info", self.tree.get_info_doc())
+
+
+class UserMenu(ttk.Frame):
+    def __init__(self, master, controller: Application, *args, **kwargs):
+        super().__init__(master, *args, **kwargs)
+        self.users_handler = UsersHandler()
+        self.controller = controller
+
+        self.field_names = self.users_handler.get_field_names()
+
+        self._build_interface()
+
+        self.controller.bind("<<show_frame>>", self.update_frame, add="+")
+        self.controller.bind("<<new_account_created>>", self.load_data, add="+")
+
+    def _build_interface(self):
+        # ----- Set up Header frame -----
+        frame_header = ttk.Frame(self, padding=(5, 5, 5, 10), width=450)
+        frame_header.pack(anchor="n", fill=tk.X, padx=10, pady=10)
+
+        self.user_label = ttk.Label(frame_header, text="USER-NAME")
+        self.user_label.pack(side=tk.LEFT)
+
+        button_go_back = ttk.Button(
+            frame_header,
+            text="Go Back", width=15,
+            command=self.__on_go_back_clicked
+        )
+        button_go_back.pack(side=tk.RIGHT)
+        # ----- --- -- ------- ----- -----
+
+        # ----- Set up Body frame -----
+        frame_body = ttk.Frame(self, width=450)
+        frame_body.pack(expand=True, fill=tk.BOTH, padx=10)
+
+        scrollbar = ttk.Scrollbar(frame_body, orient="vertical")
+        scrollbar.pack(side="right", fill="y")
+
+        self.tree = SortableTreeview(
+            frame_body,
+            columns=self.field_names,
+            selectmode="browse",
+            show="headings",
+            height=8,
+            yscrollcommand=scrollbar.set,
+        )
+        self.tree.pack(expand=True, fill=tk.BOTH, padx=10, pady=10)
+
+        scrollbar.config(command=self.tree.yview)
+
+        self.load_data()
+        # ----- --- -- ---- ----- -----
+
+        # ----- Set up Footer frame -----
+        frame_footer = ttk.Frame(self, width=450)
+        frame_footer.pack(anchor="s", fill=tk.X, padx=10, pady=10)
+
+        button_new_record = ttk.Button(frame_footer, text="Add New", command=self.__on_add_new_clicked, width=15)
+        button_new_record.pack(side=tk.LEFT)
+
+        button_del_record = ttk.Button(frame_footer, text="Delete", command=self.__on_delete_clicked, width=15)
+        button_del_record.pack(side=tk.LEFT)
+        # ----- --- -- ------ ----- -----
+
+    def load_data(self, event=None):
+        # data getting from DB
+        records = self.users_handler.get_records()
+
+        self.tree.load_data(records)
+
+    def update_frame(self, event=None):
+        if self.controller.current_menu != UserMenu:
+            return
+
+        edit_menu = tk.Menu(self.controller.menubar, tearoff=0)
+        edit_menu.add_command(label="Додати користувача", command=self.__on_add_new_clicked)
+        edit_menu.add_command(label="Видалити обраного користувача", command=self.__on_delete_clicked)
+        self.controller.menubar.add_cascade(label="Редагувати", menu=edit_menu)
+
+        if self.controller.var_authentication.get():
+            # authentication is turn ON
+            self.user_label.configure(
+                text=self.users_handler.get_authenticated_user_name() + f" ({self.controller.get_access_role()})"
+            )
+
+        if not self.controller.var_authentication.get() or self.controller.get_access_role() == DEFAULT_ADMIN_ROLE:
+            # authentication is turn OFF or access_role is ADMIN
+            admin_panel_menu = tk.Menu(self.controller.menubar, tearoff=0)
+            admin_panel_menu.add_command(label="Повернутись до головної панелі",
+                                         command=self.__on_go_back_clicked)
+            self.controller.menubar.add_cascade(label="Адмін-панель", menu=admin_panel_menu)
+
+        help_menu = tk.Menu(self.controller.menubar, tearoff=0)
+        help_menu.add_command(
+            label="Про програму",
+            command=lambda: messagebox.showinfo("Про програму", self.controller.get_info_doc())
+        )
+        help_menu.add_command(
+            label="Як взаємодіяти із таблицею",
+            command=lambda: messagebox.showinfo("Як взаємодіяти із таблицею", self.tree.get_info_doc())
+        )
+        self.controller.menubar.add_cascade(label="Інфо.", menu=help_menu)
+
+    # --- binding function ---
+    def __on_go_back_clicked(self):
+        self.controller.go_back_menu()
+
+    def __on_modal_new_account_created(self, modal: tk.Toplevel):
+        modal.destroy()
+        self.load_data()
+
+    def __on_add_new_clicked(self):
+        modal = create_modal(self.controller, "New Account")
+
+        frame = NewAccountMenu(parent=modal, controller=None, comm=lambda: self.__on_modal_new_account_created(modal))
+        frame.pack(expand=True, fill=tk.BOTH)
+
+    def __on_delete_clicked(self):
+        selected_item = self.tree.selection()
+        if not selected_item:
+            messagebox.showwarning("Видалення...", "Спершу оберіть запис у таблиці!")
+            return
+
+        selected_item_iid = selected_item[0]
+        value = self.tree.set(selected_item_iid)
+
+        result = messagebox.askyesno(
+            "Видалення...",f"Впевнені, що хочете видалити користувача {value["username"]}?"
+        )
+
+        if not result:
+            return
+
+        self.users_handler.remove(value["id"])
+        self.tree.delete(selected_item_iid)
 # ~~~~~~~~~~~~~~~ ~~~~~~~~ ~~~~~~~~~~~~~~~
 
 if __name__ == "__main__":

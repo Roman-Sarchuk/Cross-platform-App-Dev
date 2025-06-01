@@ -66,9 +66,9 @@ class SettingName(Enum):
 
 
 class AuthenticationResult(Enum):
-    INCORRECT_LOGIN = "Incorrect Login!"
-    INCORRECT_PASSWORD = "Incorrect Password!"
-    SUCCESS = "Success"
+    INCORRECT_LOGIN = "Неправильний логін!"
+    INCORRECT_PASSWORD = "Неправильний пароль!"
+    SUCCESS = "Успіх!"
 
 
 # --- security ---
@@ -83,22 +83,23 @@ class KeyStorer(Singleton):
 
     Attributes:
         KEY_FILE_NAME (str): назва для файлу, який містить ключ
-        fernet_key (bytes): Поточний симетричний ключ шифрування.
+        obfuscator (Obfuscator): Об'єкт для обфускації ключа
+        __fernet_key (bytes | None): Поточний симетричний ключ шифрування.
         key_file_path (Path): Шлях до файлу з ключем.
     """
     KEY_FILE_NAME = "secret.key"
 
     def __init__(self):
         if not self._initialized:
-            self.obfuscator = Obfuscator()
+            self.__obfuscator = Obfuscator()
 
-            self.fernet_key = None
+            self.__fernet_key = None
 
-            self.key_file_path = self._get_local_file_path()
-            if self.key_file_path.exists():
+            self.__key_file_path = self._get_local_file_path()
+            if self.__key_file_path.exists():
                 self.load_fernet_key()
             else:
-                self.fernet_key = Fernet.generate_key()
+                self.__fernet_key = Fernet.generate_key()
                 self.save_fernet_key()
 
             self._initialized = True
@@ -118,11 +119,11 @@ class KeyStorer(Singleton):
         """
         Обфускує поточний Fernet-ключ і зберігає його у файл з обмеженням доступу
         """
-        with open(self.key_file_path, "wb") as f:
-            masked_key = self.obfuscator.mask_key(self.fernet_key)
+        with open(self.__key_file_path, "wb") as f:
+            masked_key = self.__obfuscator.mask_key(self.__fernet_key)
             f.write(masked_key)
         try:
-            os.chmod(self.key_file_path, 0o600)  # rw------- for user
+            os.chmod(self.__key_file_path, 0o600)  # rw------- for user
         except Exception:
             pass
 
@@ -130,12 +131,12 @@ class KeyStorer(Singleton):
         """
         Завантажує Fernet-ключ з файлу, розшифровуючи його за допомогою обфускатора.
         """
-        with open(self.key_file_path, "rb") as f:
+        with open(self.__key_file_path, "rb") as f:
             masked_key = f.read()
-            self.fernet_key = self.obfuscator.unmask_key(masked_key)
+            self.__fernet_key = self.__obfuscator.unmask_key(masked_key)
 
     def get_fernet_key(self):
-        return self.fernet_key
+        return self.__fernet_key
 
 
 class Obfuscator(Singleton):
@@ -162,7 +163,7 @@ class Obfuscator(Singleton):
 
     def __init__(self):
         if not self._initialized:
-            self.secure_random = SystemRandom()
+            self.__secure_random = SystemRandom()
 
             self._initialized = True
 
@@ -192,11 +193,11 @@ class Obfuscator(Singleton):
             index_char = chr(ord('a') + i)
             chunks.append(index_char + chunk)
 
-        self.secure_random.shuffle(chunks)
+        self.__secure_random.shuffle(chunks)
         return ''.join(chunks).encode()
 
     @staticmethod
-    def _split_index_and_chunk(indexed_chunk: str) -> tuple[int, str]:
+    def __split_index_and_chunk(indexed_chunk: str) -> tuple[int, str]:
         """
         Розділяє індексований чанк на індекс і значення чанка.
 
@@ -234,7 +235,7 @@ class Obfuscator(Singleton):
             raise ValueError("Invalid key length")
 
         indexed_chunks = [key[i:i+self.CHUNK_LEN+1] for i in range(0, len(key), self.CHUNK_LEN+1)]
-        chunks_with_index = [self._split_index_and_chunk(indexed_chunks[i]) for i in range(0, len(indexed_chunks))]
+        chunks_with_index = [self.__split_index_and_chunk(indexed_chunks[i]) for i in range(0, len(indexed_chunks))]
 
         sorted_chunks_with_index = sorted(chunks_with_index, key=lambda chunk_with_index: chunk_with_index[0])
 
@@ -257,8 +258,8 @@ class Encryptor(Singleton):
 
     def __init__(self):
         if not self._initialized:
-            self.fernet_key = KeyStorer().get_fernet_key()
-            self.cipher = Fernet(self.fernet_key)
+            self.__fernet_key = KeyStorer().get_fernet_key()
+            self.__cipher = Fernet(self.__fernet_key)
 
             self._initialized = True
 
@@ -272,7 +273,7 @@ class Encryptor(Singleton):
         Returns:
             str: Зашифрований текст у форматі base64.
         """
-        return self.cipher.encrypt(data.encode()).decode()
+        return self.__cipher.encrypt(data.encode()).decode()
 
     def decrypt_with_fernet(self, encrypted_data: str) -> str:
         """
@@ -284,7 +285,7 @@ class Encryptor(Singleton):
         Returns:
             str: Відновлений оригінальний текст.
         """
-        return self.cipher.decrypt(encrypted_data.encode()).decode()
+        return self.__cipher.decrypt(encrypted_data.encode()).decode()
 
     @staticmethod
     def hash_with_salt(value: str) -> str:
@@ -325,7 +326,7 @@ class Encryptor(Singleton):
         Returns:
             str: Хеш у шістнадцятковому форматі.
         """
-        h = hmac.new(self.fernet_key, text.encode(), hashlib.sha256)
+        h = hmac.new(self.__fernet_key, text.encode(), hashlib.sha256)
         return h.hexdigest()
 
     def hash_boolean(self, key: str, boolean: bool) -> str:
@@ -661,7 +662,7 @@ class DatabaseInitializer(Singleton):
 
     def __init__(self, is_info_logging=False):
         if not self._initialized:
-            self.is_info_logging = is_info_logging
+            self.__is_info_logging = is_info_logging
             self.logs = []
 
             self.encryptor = Encryptor()
@@ -797,7 +798,7 @@ class DatabaseInitializer(Singleton):
         Args:
             text (str): Текст повідомлення для логу.
         """
-        if self.is_info_logging:
+        if self.__is_info_logging:
             self.logs.append(f"[{self.__class__.__name__}]: {text}")
 
     def print_logs(self):
@@ -1326,6 +1327,7 @@ class Application(tk.Tk):
         # --- build interface ---
         self.title("Arcanite")
         self.geometry("500x350")
+        self.minsize(400, 350)
 
         self.menubar = tk.Menu(self)
         self.config(menu=self.menubar)
@@ -1811,7 +1813,6 @@ class MainMenu(ttk.Frame):
         **kwargs: Усі стандартні параметри ttk.Frame.
 
     Attributes:
-        parent (tk.Widget): Батьківський віджет.
         controller (Application): Головний контролер програми.
         users_handler (UsersHandler): Обробник авторизації користувачів.
         settings_handler (SettingsHandler): Обробник системних налаштувань.
@@ -1827,7 +1828,6 @@ class MainMenu(ttk.Frame):
 
     def __init__(self, parent, controller: Application, **kwargs):
         super().__init__(parent, **kwargs)
-        self.parent = parent
         self.controller = controller
         self.users_handler = UsersHandler()
         self.settings_handler = SettingsHandler()
@@ -1855,7 +1855,7 @@ class MainMenu(ttk.Frame):
 
         self.logout_button = ttk.Button(
             frame_header,
-            text="Log Out", width=15,
+            text="Вийти", width=15,
             command=self.__on_logout_clicked
         )
         # ----- --- -- ------- ----- -----
@@ -1887,13 +1887,13 @@ class MainMenu(ttk.Frame):
         frame_footer = ttk.Frame(self, width=450)
         frame_footer.pack(anchor="s", fill=tk.X, padx=10, pady=10)
 
-        button_new_record = ttk.Button(frame_footer, text="Add New", command=self.__on_add_new_clicked, width=15)
+        button_new_record = ttk.Button(frame_footer, text="Додати", command=self.__on_add_new_clicked, width=15)
         button_new_record.pack(side=tk.LEFT)
 
-        button_del_record = ttk.Button(frame_footer, text="Delete", command=self.__on_delete_clicked, width=15)
+        button_del_record = ttk.Button(frame_footer, text="Видалити", command=self.__on_delete_clicked, width=15)
         button_del_record.pack(side=tk.LEFT)
 
-        button_table_setting = ttk.Button(frame_footer, text="Set up Table", command=self.__on_set_up_table_clicked, width=15)
+        button_table_setting = ttk.Button(frame_footer, text="Налаштувати колонки", command=self.__on_set_up_table_clicked, width=25)
         button_table_setting.pack(side=tk.RIGHT)
         # ----- --- -- ------ ----- -----
 
@@ -1925,7 +1925,7 @@ class MainMenu(ttk.Frame):
         edit_menu = tk.Menu(self.controller.menubar, tearoff=0)
         edit_menu.add_command(label="Додати запис", command=self.__on_add_new_clicked)
         edit_menu.add_command(label="Видалити обраний запис", command=self.__on_delete_clicked)
-        edit_menu.add_command(label="Налаштувати таблицю", command=self.__on_set_up_table_clicked)
+        edit_menu.add_command(label="Налаштувати колонки", command=self.__on_set_up_table_clicked)
         self.controller.menubar.add_cascade(label="Редагувати", menu=edit_menu)
 
         if self.controller.var_authentication.get():
@@ -2065,7 +2065,7 @@ class MainMenu(ttk.Frame):
         """
         Відкриває модальне вікно для налаштування колонок таблиці.
         """
-        self.modal = create_modal(self.controller, "Table Settings")
+        self.modal = create_modal(self.controller, "Налаштування колонок")
         self.modal.protocol("WM_DELETE_WINDOW", self.__on_close_set_up_table_modal)
 
         table_settings_menu = TableSettingsMenu(self.modal)
@@ -2356,16 +2356,16 @@ class LoginMenu(ttk.Frame):
         self.user_handler = UsersHandler()
 
         entry_form_fields_data = [
-            {"var_name": "login", "type": FieldType.ENTRY},
-            {"var_name": "password", "type": FieldType.SECURITY_ENTRY},
+            {"var_name": "логін", "type": FieldType.ENTRY},
+            {"var_name": "пароль", "type": FieldType.SECURITY_ENTRY},
         ]
         self.var_names = [field_data["var_name"] for field_data in entry_form_fields_data]
         entry_form_button_parameters = [
-            {"text": "Log In", "command": self.login, "width": 15},
+            {"text": "Увійти", "command": self.login, "width": 15},
         ]
 
         self.data_entry_form = DataEntryForm(
-            self, "Login Menu",
+            self, "Увійти в акаунт",
             entry_form_fields_data, entry_form_button_parameters
         )
         self.data_entry_form.pack(fill=tk.BOTH, expand=True)
@@ -2385,17 +2385,17 @@ class LoginMenu(ttk.Frame):
         for var_name in self.var_names:
             value = self.data_entry_form.get_field_value(var_name)
             if not value:
-                messagebox.showwarning("Login Menu", f"The field '{var_name}' can't be empty!")
+                messagebox.showwarning("Меню входу", f"Поле '{var_name}' не може бути порожнім!")
                 return
 
         authentication_result = self.user_handler.authenticate(
-            login = self.data_entry_form.get_field_value("login"),
-            password = self.data_entry_form.get_field_value("password")
+            login = self.data_entry_form.get_field_value("логін"),
+            password = self.data_entry_form.get_field_value("пароль")
         )
 
         # check authentication
         if authentication_result != AuthenticationResult.SUCCESS:
-            messagebox.showwarning("Login Menu", authentication_result.value)
+            messagebox.showwarning("Меню входу", authentication_result.value)
             return
 
         # login
@@ -2448,19 +2448,19 @@ class NewAccountMenu(ttk.Frame):
         roles = tuple(self.role_dict.keys())
 
         entry_form_fields_data = [
-            {"var_name": "username", "type": FieldType.ENTRY},
-            {"var_name": "login", "type": FieldType.ENTRY},
-            {"var_name": "password", "type": FieldType.SECURITY_ENTRY},
-            {"var_name": "confirm_password", "type": FieldType.SECURITY_ENTRY},
-            {"var_name": "role", "type": FieldType.COMBOBOX, "list": roles}
+            {"var_name": "ім'я користувача", "type": FieldType.ENTRY},
+            {"var_name": "логін", "type": FieldType.ENTRY},
+            {"var_name": "пароль", "type": FieldType.SECURITY_ENTRY},
+            {"var_name": "підтвердіть пароль", "type": FieldType.SECURITY_ENTRY},
+            {"var_name": "роль", "type": FieldType.COMBOBOX, "list": roles}
         ]
         self.var_names = [field_data["var_name"] for field_data in entry_form_fields_data]
         entry_form_button_parameters = [
-            {"text": "Create", "command": self.create_new_account},
+            {"text": "Створити", "command": self.create_new_account},
         ]
 
         self.data_entry_form = DataEntryForm(
-            self, "Create New Account",
+            self, "Новий обліковий запис",
             entry_form_fields_data, entry_form_button_parameters
         )
         self.data_entry_form.pack(fill=tk.BOTH, expand=True)
@@ -2482,26 +2482,28 @@ class NewAccountMenu(ttk.Frame):
         for var_name in self.var_names:
             value = self.data_entry_form.get_field_value(var_name)
             if not value:
-                messagebox.showwarning("Creating New Account...", f"The field '{var_name}' can't be empty!")
+                messagebox.showwarning("Створення акаунту...", f"Поле '{var_name}' не може бути порожнім!")
                 return
             user_values[var_name] = value
 
         # verify password == confirm_password
-        if user_values["password"] != user_values["confirm_password"]:
-            messagebox.showwarning("Creating New Account...", f"Password and confirm_password don't match!")
+        if user_values["пароль"] != user_values["підтвердіть пароль"]:
+            messagebox.showwarning("Створення акаунту...",
+                                   f"поле 'пароль' та 'підтвердіть пароль' не збігаються!")
             return
 
         # verify login available
-        if self.db_handler.record_exists(TableName.USERS, {"login": user_values["login"]}):
-            messagebox.showwarning("Creating New Account...", "A user with that login already exists. Please choose a different login!")
+        if self.db_handler.record_exists(TableName.USERS, {"login": user_values["логін"]}):
+            messagebox.showwarning("Створення акаунту...",
+                                   "Користувач із таким логіном вже існує. Будь ласка, виберіть інший логін.!")
             return
 
         # create account
         self.user_handler.add(
-            username = user_values["username"],
-            login = user_values["login"],
-            password = user_values["password"],
-            role_id = self.role_dict[user_values["role"]]
+            username = user_values["ім'я користувача"],
+            login = user_values["логін"],
+            password = user_values["пароль"],
+            role_id = self.role_dict[user_values["роль"]]
         )
 
         if self.controller:
@@ -2532,8 +2534,8 @@ class NewAccountMenu(ttk.Frame):
         """
         self.is_first_account_mod = True
 
-        self.data_entry_form.set_field_value("role", "admin")
-        self.data_entry_form.config_control_widget("role", state="disabled")    # role combobox
+        self.data_entry_form.set_field_value("роль", "admin")
+        self.data_entry_form.config_control_widget("роль", state="disabled")    # role combobox
 
     def turn_off_first_account_mod(self):
         """
@@ -2542,7 +2544,7 @@ class NewAccountMenu(ttk.Frame):
         """
         self.is_first_account_mod = False
 
-        self.data_entry_form.config_control_widget("role", state="readonly")    # role combobox
+        self.data_entry_form.config_control_widget("роль", state="readonly")    # role combobox
 
 
 class NewRecordMenu(ttk.Frame):
@@ -2578,12 +2580,12 @@ class NewRecordMenu(ttk.Frame):
         ]
         self.var_names = [field_data["var_name"] for field_data in entry_form_fields_data]
         entry_form_button_parameters = [
-            {"text": "Add", "command": self.add_new_record, "width": 15},
-            {"text": "Cancel", "command": self.controller.destroy, "width": 15},
+            {"text": "Додати", "command": self.add_new_record, "width": 15},
+            {"text": "Скасувати", "command": self.controller.destroy, "width": 15},
         ]
 
         self.data_entry_form = DataEntryForm(
-            self, "Add New Record",
+            self, "Додати новий запис",
             entry_form_fields_data, entry_form_button_parameters
         )
         self.data_entry_form.pack(fill=tk.BOTH, expand=True)
@@ -2602,7 +2604,7 @@ class NewRecordMenu(ttk.Frame):
 
         # varify empty fields
         if all([not value for value in data.values()]):
-            messagebox.showwarning("Login Menu", f"Не можуть всі поля бути пусті!")
+            messagebox.showwarning("Додання нового запису", f"Не можуть всі поля бути пусті!")
             return
 
         self.tree.insert("", "end", values=tuple(data.values()))
@@ -2684,13 +2686,13 @@ class TableSettingsMenu(ttk.Frame):
         frame_tree_button.grid_columnconfigure(1, weight=1)
 
         button_add_new_column = ttk.Button(
-            frame_tree_button, text="Add New",
+            frame_tree_button, text="Додати",
             command=lambda: self.frame_add_new_colum.tkraise()
         )
         button_add_new_column.grid(row=0, column=0)
 
         button_delete_column = ttk.Button(
-            frame_tree_button, text="Delete",
+            frame_tree_button, text="Видалити",
             command=self.__on_delete_column
         )
         button_delete_column.grid(row=0, column=1)
@@ -2702,16 +2704,16 @@ class TableSettingsMenu(ttk.Frame):
         self.frame_add_new_colum.grid_columnconfigure(0, weight=1)
         self.frame_add_new_colum.grid_columnconfigure(1, weight=1)
 
-        label = ttk.Label(self.frame_add_new_colum, text="Column name:", font=("Arial", 15))
+        label = ttk.Label(self.frame_add_new_colum, text="Назва колонки:", font=("Arial", 15))
         label.grid(column=0, row=0, columnspan=2, padx=5, pady=5)
 
         entry = ttk.Entry(self.frame_add_new_colum, textvariable=self.var_new_col)
         entry.grid(column=0, row=1, columnspan=2, padx=5, pady=5)
 
-        button_apply = ttk.Button(self.frame_add_new_colum, text="Apply", command=self.__on_add_new_column)
+        button_apply = ttk.Button(self.frame_add_new_colum, text="Підтвердити", command=self.__on_add_new_column)
         button_apply.grid(column=0, row=2, padx=5, pady=5)
 
-        button_cancel = ttk.Button(self.frame_add_new_colum, text="Cancel", command=lambda: self.frame_tree.tkraise())
+        button_cancel = ttk.Button(self.frame_add_new_colum, text="Скасувати", command=lambda: self.frame_tree.tkraise())
         button_cancel.grid(column=1, row=2, padx=5, pady=5)
 
     def __before_edit_col_name(self, old_value, new_value, item=None, column=None):
@@ -2732,17 +2734,17 @@ class TableSettingsMenu(ttk.Frame):
             bool: True, якщо перейменування допустиме і виконано; False — інакше.
         """
         if not new_value:
-            messagebox.showwarning("Column edit", "Не можна вести порожнє значення!")
+            messagebox.showwarning("Налаштування колонок", "Не можна вести порожнє значення!")
             return False
 
         if not self.__validate_english_letters(new_value):
-            messagebox.showwarning("Column edit", "Використовуйте тільки англійські літери та символ _")
+            messagebox.showwarning("Налаштування колонок", "Використовуйте тільки англійські літери та символ _")
             return False
 
         try:
             self.def_table_handler.rename_column(old_value, new_value)
         except Exception as e:
-            messagebox.showerror("Column edit", f"Не вдалося змінити назви колонки!\nОпис проблеми:\n{e}")
+            messagebox.showerror("Налаштування колонок", f"Не вдалося змінити назви колонки!\nОпис проблеми:\n{e}")
             return False
         return True
 
@@ -2769,20 +2771,20 @@ class TableSettingsMenu(ttk.Frame):
         """
         selection = self.tree.selection()
         if not selection:
-            messagebox.showinfo("Column delete", "Оберіть колонку для видалення!")
+            messagebox.showinfo("Видалення колонок", "Оберіть колонку для видалення!")
             return
 
         selected_item = selection[0]
         col_name = self.tree.item(selected_item, "text")
 
-        result = messagebox.askyesno("Column delete", f"Ви впевнені, що хочете видалити колонку {col_name}?\nДані будуть втрачені!")
+        result = messagebox.askyesno("Видалення колонок", f"Ви впевнені, що хочете видалити колонку {col_name}?\nДані будуть втрачені!")
 
         if result:
             try:
                 self.def_table_handler.delete_column(col_name)
                 self.tree.delete(selected_item)
             except Exception as e:
-                messagebox.showerror("Column delete", f"Не вдалося видалити колонки!\nОпис проблеми:\n{e}")
+                messagebox.showerror("Видалення колонок", f"Не вдалося видалити колонки!\nОпис проблеми:\n{e}")
                 return
 
     def __on_add_new_column(self):
@@ -2798,22 +2800,22 @@ class TableSettingsMenu(ttk.Frame):
         value = self.var_new_col.get()
 
         if not value:
-            messagebox.showwarning("New Column", "Не можна вести порожнє значення!")
+            messagebox.showwarning("Нова колонка", "Не можна вести порожнє значення!")
             return False
 
         if not self.__validate_english_letters(value):
-            messagebox.showwarning("New Column", "Використовуйте тільки англійські літери та символ _")
+            messagebox.showwarning("Нова колонка", "Використовуйте тільки англійські літери та символ _")
             return
 
         if value in self.tree["columns"]:
-            messagebox.showwarning("New Column", "Така колонка вже існує!")
+            messagebox.showwarning("Нова колонка", "Така колонка вже існує!")
             return
 
         try:
             self.def_table_handler.add_column(value)
             self.tree.insert("", "end", text=value)
         except Exception as e:
-            messagebox.showerror("New Column", "Не вдалося додати колонки!\nОпис проблеми:\n{e}")
+            messagebox.showerror("Нова колонка", "Не вдалося додати колонки!\nОпис проблеми:\n{e}")
             return
 
         self.frame_tree.tkraise()
@@ -2834,7 +2836,7 @@ class TableSettingsMenu(ttk.Frame):
 
         Викликає метод get_info_doc() у віджеті tree для отримання тексту.
         """
-        messagebox.showinfo("Info", self.tree.get_info_doc())
+        messagebox.showinfo("Інфо.", self.tree.get_info_doc())
 
 
 class UserMenu(ttk.Frame):
@@ -2885,7 +2887,7 @@ class UserMenu(ttk.Frame):
 
         button_go_back = ttk.Button(
             frame_header,
-            text="Go Back", width=15,
+            text="Повернутись", width=15,
             command=self.__on_go_back_clicked
         )
         button_go_back.pack(side=tk.RIGHT)
@@ -2917,10 +2919,10 @@ class UserMenu(ttk.Frame):
         frame_footer = ttk.Frame(self, width=450)
         frame_footer.pack(anchor="s", fill=tk.X, padx=10, pady=10)
 
-        button_new_record = ttk.Button(frame_footer, text="Add New", command=self.__on_add_new_clicked, width=15)
+        button_new_record = ttk.Button(frame_footer, text="Додати", command=self.__on_add_new_clicked, width=15)
         button_new_record.pack(side=tk.LEFT)
 
-        button_del_record = ttk.Button(frame_footer, text="Delete", command=self.__on_delete_clicked, width=15)
+        button_del_record = ttk.Button(frame_footer, text="Видалити", command=self.__on_delete_clicked, width=15)
         button_del_record.pack(side=tk.LEFT)
         # ----- --- -- ------ ----- -----
 
@@ -2999,7 +3001,7 @@ class UserMenu(ttk.Frame):
         """
         Відкриває модальне вікно для додавання нового користувача.
         """
-        modal = create_modal(self.controller, "New Account")
+        modal = create_modal(self.controller, "Додати користувача")
 
         frame = NewAccountMenu(parent=modal, controller=None, comm=lambda: self.__on_modal_new_account_created(modal))
         frame.pack(expand=True, fill=tk.BOTH)

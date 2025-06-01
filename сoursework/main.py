@@ -1760,6 +1760,19 @@ class SortableEditableTreeview(SortableTreeview, EditableTreeview):
 
 
 def create_modal(master: tk.Tk, title: str) -> tk.Toplevel:
+    """
+    Створює модальне (підлегле) вікно поверх головного вікна.
+
+    Вікно є незмінюваним за розміром, блокує взаємодію з головним
+    вікном до його закриття (через `grab_set`), та має передній пріоритет (`transient`).
+
+    Args:
+        master (tk.Tk): Головне вікно, відносно якого створюється модальне.
+        title (str): Заголовок нового модального вікна.
+
+    Returns:
+        tk.Toplevel: Створене модальне вікно.
+    """
     top_level = tk.Toplevel(master)
 
     # top_level setting

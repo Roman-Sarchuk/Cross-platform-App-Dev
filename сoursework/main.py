@@ -285,6 +285,8 @@ class Encryptor(Singleton):
         Returns:
             str: Відновлений оригінальний текст.
         """
+        if not encrypted_data:
+            return str()
         return self.__cipher.decrypt(encrypted_data.encode()).decode()
 
     @staticmethod
